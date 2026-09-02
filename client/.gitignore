@@ -1,0 +1,52 @@
+# =========================
+# Dependencies
+# =========================
+node_modules/
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Build Output
+# =========================
+dist/
+dist-ssr/
+build/
+
+# =========================
+# Logs
+# =========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Local / Temporary Files
+# =========================
+*.local
+.cache/
+
+# =========================
+# Operating System
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE
+# =========================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Visual Studio
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
