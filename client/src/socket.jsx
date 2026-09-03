@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-const URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5000";
+const URL = import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com";
 
 const socket = io(URL, {
   transports: ["websocket", "polling"],

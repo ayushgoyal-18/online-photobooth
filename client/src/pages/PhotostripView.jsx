@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Download, Share2, Check, QrCode, X, Camera, Sparkles } from "lucide-react";
+import { Download, Share2, Check, QrCode, X, Camera, Sparkles, Copy, ExternalLink } from "lucide-react";
 
 export default function PhotostripView() {
   const { stripId } = useParams();
@@ -11,8 +11,10 @@ export default function PhotostripView() {
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [lanIp, setLanIp] = useState("");
+  const [copiedQr, setCopiedQr] = useState(false);
 
-  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5000";
+  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com";
 
   useEffect(() => {
     // 1. Try fetching from backend API
@@ -39,6 +41,18 @@ export default function PhotostripView() {
         setError("Photostrip not found or link has expired.");
         setLoading(false);
       });
+
+    // Auto-fetch local machine LAN IP only in local development
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      fetch(`${SERVER_URL}/api/network-info`)
+        .then(res => res.json())
+        .then(data => {
+          if (data?.localIp && data.localIp !== "localhost") {
+            setLanIp(data.localIp);
+          }
+        })
+        .catch(() => {});
+    }
   }, [stripId, SERVER_URL]);
 
   const copyShareLink = () => {
@@ -87,6 +101,11 @@ export default function PhotostripView() {
   }
 
   const imageUrl = strip.cloudinaryUrl || strip.dataUrl;
+  const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const origin = isLocal && lanIp
+    ? `http://${lanIp}:${window.location.port || "5173"}`
+    : window.location.origin;
+  const qrTargetUrl = `${origin}/strip/${stripId}`;
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--ink)" }} className="aurora-bg">
@@ -155,7 +174,7 @@ export default function PhotostripView() {
         <AnimatePresence>
           {showQr && (
             <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(9,9,16,0.85)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="card" style={{ maxWidth: 360, width: "100%", padding: 24, textAlign: "center", position: "relative" }}>
+              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="card" style={{ maxWidth: 380, width: "100%", padding: 24, textAlign: "center", position: "relative" }}>
                 <button onClick={() => setShowQr(false)} style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer" }}>
                   <X size={18} />
                 </button>
@@ -163,14 +182,38 @@ export default function PhotostripView() {
                   <QrCode size={22} />
                 </div>
                 <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: "var(--cream)" }}>Scan to View on Mobile</h3>
-                <p style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 16 }}>
-                  Scan with your phone camera to open and save this photostrip.
+                <p style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 14, lineHeight: 1.5 }}>
+                  Scan with your smartphone camera on Wi-Fi to view and download this photostrip directly.
                 </p>
                 <div style={{ background: "#fff", padding: 12, borderRadius: 12, display: "inline-block", marginBottom: 14 }}>
-                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(window.location.href)}`} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrTargetUrl)}`} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: "6px 14px", fontSize: 11, borderRadius: 8 }}
+                    onClick={() => {
+                      navigator.clipboard.writeText(qrTargetUrl);
+                      setCopiedQr(true);
+                      setTimeout(() => setCopiedQr(false), 2000);
+                    }}
+                  >
+                    {copiedQr ? <Check size={11} color="#86EFAC" /> : <Copy size={11} />}
+                    {copiedQr ? "Link Copied!" : "Copy Link"}
+                  </button>
+                  <a
+                    href={qrTargetUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-ghost"
+                    style={{ padding: "6px 14px", fontSize: 11, borderRadius: 8, textDecoration: "none" }}
+                  >
+                    <ExternalLink size={11} /> Open
+                  </a>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--violet-lt)", fontWeight: 700, wordBreak: "break-all" }}>
-                  {window.location.href}
+                  {qrTargetUrl}
                 </div>
               </motion.div>
             </div>

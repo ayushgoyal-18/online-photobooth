@@ -7,6 +7,7 @@ const mongoose   = require("mongoose");
 const helmet     = require("helmet");
 const rateLimit  = require("express-rate-limit");
 const path       = require("path");
+const os         = require("os");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const cloudinary = require("./config/cloudinary");
 
@@ -35,10 +36,22 @@ const allowedOrigins = process.env.NODE_ENV === "production"
   ? (envOrigins.length > 0 ? envOrigins : ["https://framoji-frontend.onrender.com", "https://framoji.com"])
   : [...devOrigins, ...envOrigins];
 
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) return true;
+  if (origin === "https://framoji-frontend.onrender.com" || origin.endsWith(".onrender.com")) return true;
+  // In development, allow any local network / private IP or localhost with any port
+  if (process.env.NODE_ENV !== "production") {
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
     return callback(new Error("Origin not allowed by CORS"));
@@ -216,6 +229,33 @@ app.get("/api/ice-servers", (req, res) => {
     { urls: "stun:stun.services.mozilla.com" },
   ];
   res.json({ iceServers });
+});
+
+function getLocalIp() {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name]) {
+        if (iface.family === "IPv4" && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+  } catch (_) {}
+  return "localhost";
+}
+
+app.get("/api/network-info", (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.json({ devOnly: true, localIp: null });
+  }
+  const localIp = getLocalIp();
+  res.json({
+    localIp,
+    serverPort: PORT,
+    clientPort: 5173,
+    clientLanUrl: `http://${localIp}:5173`,
+  });
 });
 
 const io = new Server(server, {

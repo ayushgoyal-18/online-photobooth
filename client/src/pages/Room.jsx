@@ -6,7 +6,7 @@ import {
   Share2, AlertCircle, ArrowRight,
   Mic, MicOff, Video, VideoOff, QrCode, X,
   Image as ImageIcon,
-  Home,
+  Home, ExternalLink, Sparkles, FlipHorizontal,
 } from "lucide-react";
 import socket from "../socket";
 
@@ -75,7 +75,7 @@ function fireConfetti() {
   } catch (_) { }
 }
 
-function captureFromVideo(videoEl, maxDimension = null) {
+function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
   if (!videoEl) { devWarn("[capture] no videoEl"); return null; }
   if (videoEl.readyState < 2) {
     devWarn("[capture] video not ready — readyState:", videoEl.readyState);
@@ -94,7 +94,12 @@ function captureFromVideo(videoEl, maxDimension = null) {
   const h = Math.round(sourceH * scale);
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
-  canvas.getContext("2d").drawImage(videoEl, 0, 0, w, h);
+  const ctx = canvas.getContext("2d");
+  if (isMirrored) {
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(videoEl, 0, 0, w, h);
   const d = canvas.toDataURL("image/jpeg", maxDimension ? 0.86 : 0.92);
   devLog("[capture] ok", w, "x", h, "len:", d.length);
   return d;
@@ -325,7 +330,7 @@ function useWebRTC() {
   return { remoteStreams, cleanupPeers, setStream, createOfferForPeer };
 }
 
-function LocalCameraView({ stream, videoRef }) {
+function LocalCameraView({ stream, videoRef, isMirrored = false }) {
   return (
     <video
       ref={(el) => {
@@ -338,7 +343,16 @@ function LocalCameraView({ stream, videoRef }) {
       autoPlay
       playsInline
       muted
-      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        display: "block",
+        transform: isMirrored ? "scaleX(-1)" : "none",
+        transition: "transform 0.2s ease",
+      }}
     />
   );
 }
@@ -611,12 +625,15 @@ export default function Room() {
   const [isMicMuted, setIsMicMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [facingMode, setFacingMode] = useState("user");
-  const [camNotice, setCamNotice] = useState("");
   const [currentCamIndex, setCurrentCamIndex] = useState(0);
   const [customQrUrl, setCustomQrUrl] = useState("");
+  const [lanIp, setLanIp] = useState("");
+  const [qrTab, setQrTab] = useState("strip");
+  const [qrSaving, setQrSaving] = useState(false);
+  const [copiedQrUrl, setCopiedQrUrl] = useState(false);
+  const [isMirrored, setIsMirrored] = useState(false);
 
   const toggleMic = () => {
-    if (!localStream) return;
     const audioTracks = localStream.getAudioTracks();
     if (audioTracks.length === 0) {
       navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(audioStream => {
@@ -715,6 +732,8 @@ export default function Room() {
   useEffect(() => { photoTargetRef.current = boothData.photoCount || 4; }, [boothData.photoCount]);
   useEffect(() => { isHostRef.current = isHostState; }, [isHostState]);
   useEffect(() => { guestNameRef.current = guestName; }, [guestName]);
+  const isMirroredRef = useRef(isMirrored);
+  useEffect(() => { isMirroredRef.current = isMirrored; }, [isMirrored]);
 
   useEffect(() => {
     let stream;
@@ -843,7 +862,7 @@ export default function Room() {
       });
     }
 
-    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280);
+    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280, isMirroredRef.current);
 
     devLog("[CAPTURE] 2 frame result]", {
       role,
@@ -1267,25 +1286,36 @@ export default function Room() {
     }
   };
 
-  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5000";
+  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com";
 
   const allPeerNames = peerList.map(p => p.name).filter(Boolean);
   const stripNames = allPeerNames.length > 0 ? allPeerNames.join(" · ") : boothData.participant1;
 
-  const downloadStrip = async () => {
-    setSelectedStickerId(null);
-    setDown(true);
+  // Fetch local machine's LAN IP only in development when testing on localhost
+  useEffect(() => {
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      fetch(`${SERVER_URL}/api/network-info`)
+        .then(res => res.json())
+        .then(data => {
+          if (data?.localIp && data.localIp !== "localhost") {
+            setLanIp(data.localIp);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [SERVER_URL]);
+
+  const savePhotostripToCloudAndLocal = async () => {
     try {
       const { default: html2canvas } = await import("html2canvas");
       const el = photostripExportRef.current || document.getElementById("photostrip-export");
+      if (!el) return null;
       const scale = window.innerWidth < 600 ? 2 : 3;
       const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
       const dataUrl = c.toDataURL("image/png");
-      const a = document.createElement("a");
-      a.download = `framoji-${roomId}.png`; a.href = dataUrl; a.click();
-
       const separateStripId = stripIdRef.current;
       let cloudinaryUrl = null;
+
       try {
         const res = await fetch(`${SERVER_URL}/api/photostrips`, {
           method: "POST",
@@ -1324,6 +1354,32 @@ export default function Room() {
         const updated = [entry, ...history.filter(h => h.stripId !== separateStripId && h.roomId !== roomId)].slice(0, 15);
         localStorage.setItem("framoji-gallery", JSON.stringify(updated));
       } catch (err) { console.warn("[gallery] save error:", err); }
+
+      return { dataUrl, cloudinaryUrl, stripId: separateStripId };
+    } catch (err) {
+      console.warn("[save] photostrip save error:", err);
+      return null;
+    }
+  };
+
+  const openMobileQrModal = async () => {
+    setShowQrModal(true);
+    setQrSaving(true);
+    await savePhotostripToCloudAndLocal();
+    setQrSaving(false);
+  };
+
+  const downloadStrip = async () => {
+    setSelectedStickerId(null);
+    setDown(true);
+    try {
+      const saved = await savePhotostripToCloudAndLocal();
+      if (saved?.dataUrl) {
+        const a = document.createElement("a");
+        a.download = `framoji-${roomId}.png`;
+        a.href = saved.dataUrl;
+        a.click();
+      }
     } finally { setDown(false); }
   };
 
@@ -1403,7 +1459,7 @@ export default function Room() {
     ];
     const LocalCameraSlot = ({ label }) => (
       <div style={{ position: "relative", aspectRatio: "4/3", background: "#0a0a0a" }}>
-        <LocalCameraView stream={localStream} videoRef={localVideoRef} />
+        <LocalCameraView stream={localStream} videoRef={localVideoRef} isMirrored={isMirrored} />
         {corners.map((s, i) => <div key={i} style={{ position: "absolute", width: 14, height: 14, ...s }} />)}
         {label && (
           <div style={{ position: "absolute", bottom: 7, left: 7, background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)", borderRadius: 4, padding: "2px 7px", fontSize: 10, fontWeight: 700, color: "#fff" }}>
@@ -1440,7 +1496,7 @@ export default function Room() {
             <div key={peer.id} style={{ position: "relative", aspectRatio: "4/3", background: "#0a0a0a" }}>
               {isMe ? (
                 <>
-                  <LocalCameraView stream={localStream} videoRef={localVideoRef} />
+                  <LocalCameraView stream={localStream} videoRef={localVideoRef} isMirrored={isMirrored} />
                   {corners.map((s, i) => <div key={i} style={{ position: "absolute", width: 14, height: 14, ...s }} />)}
                 </>
               ) : remoteStreams[peer.id] ? (
@@ -1657,7 +1713,22 @@ export default function Room() {
                       style={{ padding: "6px 14px", fontSize: 12, borderRadius: 8 }}
                       title="Flip camera device"
                     >
-                      <RefreshCw size={13} /> Flip Cam
+                      <RefreshCw size={13} /> Switch Cam
+                    </button>
+                    <button
+                      onClick={() => setIsMirrored(prev => !prev)}
+                      className="btn btn-ghost"
+                      style={{
+                        padding: "6px 14px",
+                        fontSize: 12,
+                        borderRadius: 8,
+                        background: isMirrored ? "rgba(124,58,237,0.18)" : "rgba(255,255,255,0.06)",
+                        color: isMirrored ? "var(--violet-lt)" : "var(--text)",
+                        border: `1px solid ${isMirrored ? "rgba(124,58,237,0.4)" : "var(--border)"}`
+                      }}
+                      title="Flip or Mirror camera"
+                    >
+                      <FlipHorizontal size={13} /> {isMirrored ? "Mirror View" : "Real View"}
                     </button>
                   </div>
                   <div style={{ padding: 12 }}>
@@ -1807,7 +1878,7 @@ export default function Room() {
                 {copiedImage ? "Copied Image!" : "Copy Image"}
               </button>
               <button className="btn btn-ghost" style={{ padding: "12px 22px", fontSize: 13, borderRadius: 11 }}
-                onClick={() => setShowQrModal(true)}>
+                onClick={openMobileQrModal}>
                 <QrCode size={13} /> Mobile QR Share
               </button>
               <button className="btn btn-ghost" style={{ padding: "12px 22px", fontSize: 13, borderRadius: 11 }}
@@ -1824,42 +1895,137 @@ export default function Room() {
             </div>
 
             <AnimatePresence>
-              {showQrModal && (
-                <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(9,9,16,0.85)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-                  <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="card" style={{ maxWidth: 380, width: "100%", padding: 24, textAlign: "center", position: "relative" }}>
-                    <button onClick={() => setShowQrModal(false)} style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer" }}>
-                      <X size={18} />
-                    </button>
-                    <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(124,58,237,0.15)", border: "1px solid rgba(124,58,237,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", color: "var(--violet-lt)" }}>
-                      <QrCode size={22} />
-                    </div>
-                    <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: "var(--cream)" }}>Scan to open on phone</h3>
-                    <p style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 14, lineHeight: 1.5 }}>
-                      Scan this QR code with your smartphone camera to open this photobooth session or download your saved photostrip directly.
-                    </p>
-                    <div style={{ background: "#fff", padding: 12, borderRadius: 12, display: "inline-block", marginBottom: 14 }}>
-                      <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(customQrUrl || window.location.href)}`} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
-                    </div>
-                    <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", marginBottom: 10 }}>
-                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--text-sub)", marginBottom: 4, textAlign: "left", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-                        Target URL / Wi-Fi IP
-                      </label>
-                      <input
-                        className="field"
-                        placeholder={window.location.href}
-                        value={customQrUrl}
-                        onChange={e => setCustomQrUrl(e.target.value)}
-                        style={{ fontSize: 11, padding: "7px 10px" }}
-                      />
-                    </div>
-                    {window.location.hostname === "localhost" && !customQrUrl && (
-                      <p style={{ fontSize: 10, color: "#FCD34D", lineHeight: 1.4, textAlign: "left", background: "rgba(245,158,11,0.08)", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(245,158,11,0.2)" }}>
-                        💡 <b>Local Network Tip:</b> "localhost" points to your phone itself. To scan on your local Wi-Fi, type your laptop's local IP (e.g. <code>http://192.168.x.x:5173/room/...</code>) above!
+              {showQrModal && (() => {
+                const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+                const origin = isLocal && lanIp
+                  ? `http://${lanIp}:${window.location.port || "5173"}`
+                  : window.location.origin;
+                const computedUrl = qrTab === "strip"
+                  ? `${origin}/strip/${stripIdRef.current}`
+                  : `${origin}/room/${roomId}`;
+                const activeUrl = customQrUrl.trim() || computedUrl;
+
+                return (
+                  <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(9,9,16,0.85)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="card" style={{ maxWidth: 420, width: "100%", padding: 24, textAlign: "center", position: "relative" }}>
+                      <button onClick={() => setShowQrModal(false)} style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer" }}>
+                        <X size={18} />
+                      </button>
+                      <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(124,58,237,0.15)", border: "1px solid rgba(124,58,237,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", color: "var(--violet-lt)" }}>
+                        <QrCode size={22} />
+                      </div>
+                      <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4, color: "var(--cream)" }}>Scan to open on phone</h3>
+                      <p style={{ fontSize: 12, color: "var(--text-sub)", marginBottom: 14, lineHeight: 1.5 }}>
+                        Scan this QR code with your smartphone camera to download your saved photostrip or open this photobooth session.
                       </p>
-                    )}
-                  </motion.div>
-                </div>
-              )}
+
+                      {/* Tab Switcher */}
+                      <div style={{ display: "flex", background: "rgba(255,255,255,0.05)", borderRadius: 10, padding: 3, marginBottom: 14 }}>
+                        <button
+                          type="button"
+                          onClick={() => { setQrTab("strip"); setCustomQrUrl(""); }}
+                          style={{
+                            flex: 1,
+                            padding: "6px 10px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            borderRadius: 8,
+                            border: "none",
+                            cursor: "pointer",
+                            background: qrTab === "strip" ? "var(--violet-lt)" : "transparent",
+                            color: qrTab === "strip" ? "#000" : "var(--text-sub)",
+                            transition: "all 0.2s ease"
+                          }}
+                        >
+                          📸 Download Strip
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setQrTab("room"); setCustomQrUrl(""); }}
+                          style={{
+                            flex: 1,
+                            padding: "6px 10px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            borderRadius: 8,
+                            border: "none",
+                            cursor: "pointer",
+                            background: qrTab === "room" ? "var(--violet-lt)" : "transparent",
+                            color: qrTab === "room" ? "#000" : "var(--text-sub)",
+                            transition: "all 0.2s ease"
+                          }}
+                        >
+                          👥 Booth Session
+                        </button>
+                      </div>
+
+                      {/* QR Code Container */}
+                      <div style={{ background: "#fff", padding: 12, borderRadius: 12, display: "inline-block", marginBottom: 12 }}>
+                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(activeUrl)}`} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
+                      </div>
+
+                      {/* Status / Link copy bar */}
+                      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12 }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ padding: "6px 14px", fontSize: 11, borderRadius: 8 }}
+                          onClick={() => {
+                            navigator.clipboard.writeText(activeUrl);
+                            setCopiedQrUrl(true);
+                            setTimeout(() => setCopiedQrUrl(false), 2000);
+                          }}
+                        >
+                          {copiedQrUrl ? <Check size={11} color="#86EFAC" /> : <Copy size={11} />}
+                          {copiedQrUrl ? "Link Copied!" : "Copy Link"}
+                        </button>
+                        <a
+                          href={activeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-ghost"
+                          style={{ padding: "6px 14px", fontSize: 11, borderRadius: 8, textDecoration: "none" }}
+                        >
+                          <ExternalLink size={11} /> Test Link
+                        </a>
+                      </div>
+
+                      {/* Wi-Fi / LAN IP Info */}
+                      <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", marginBottom: 8 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text-sub)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                            Target URL
+                          </label>
+                          {isLocal && lanIp && (
+                            <span style={{ fontSize: 9, color: "#86EFAC", background: "rgba(134,239,172,0.1)", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>
+                              Wi-Fi IP: {lanIp}
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          className="field"
+                          placeholder={computedUrl}
+                          value={customQrUrl}
+                          onChange={e => setCustomQrUrl(e.target.value)}
+                          style={{ fontSize: 11, padding: "7px 10px" }}
+                        />
+                      </div>
+
+                      {isLocal && (
+                        <p style={{ fontSize: 10, color: "#FCD34D", lineHeight: 1.4, textAlign: "left", background: "rgba(245,158,11,0.08)", padding: "8px 10px", borderRadius: 8, border: "1px solid rgba(245,158,11,0.2)" }}>
+                          💡 <b>Wi-Fi Tip:</b> Make sure your smartphone is connected to the same Wi-Fi network as this computer to scan and open the page.
+                        </p>
+                      )}
+
+                      {qrSaving && (
+                        <p style={{ fontSize: 11, color: "var(--mauve)", marginTop: 8 }}>
+                          Saving photostrip to cloud…
+                        </p>
+                      )}
+                    </motion.div>
+                  </div>
+                );
+              })()}
             </AnimatePresence>
           </motion.div>
         )}
