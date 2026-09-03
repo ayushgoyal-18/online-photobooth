@@ -824,20 +824,23 @@ export default function Room() {
       videoHeight: hiddenVideoRef.current?.videoHeight
     });
 
-    const video = hiddenVideoRef.current;
+    const video = (localVideoRef.current && localVideoRef.current.videoWidth > 0 && localVideoRef.current.readyState >= 2)
+      ? localVideoRef.current
+      : (hiddenVideoRef.current || localVideoRef.current);
+
     if (!video) {
-      devWarn("[capture] hiddenVideoRef is missing for role:", role);
+      devWarn("[capture] video source is missing for role:", role);
       return;
     }
 
     if (localStream && video.srcObject !== localStream) {
-      devLog("[capture] re-attaching localStream to hidden video for role:", role);
+      devLog("[capture] re-attaching localStream to video for role:", role);
       video.srcObject = localStream;
       video.play().catch(() => {});
     }
 
     if (video.videoWidth === 0 || video.readyState < 2) {
-      devLog("[capture] waiting for hidden video ready...", { readyState: video.readyState, videoWidth: video.videoWidth });
+      devLog("[capture] waiting for video ready...", { readyState: video.readyState, videoWidth: video.videoWidth });
       await new Promise((resolve) => {
         let done = false;
         const check = () => {
@@ -1222,7 +1225,11 @@ export default function Room() {
   }, []); // eslint-disable-line
 
   const startShot = () => {
-    if (isSoloRef.current) { runCountdown(); return; }
+    getAudioCtx();
+    if (isSolo || isSoloRef.current || isSoloMode) {
+      runCountdown();
+      return;
+    }
     if (isHostRef.current) socket.emit("start-countdown", roomId);
   };
 
@@ -1233,11 +1240,13 @@ export default function Room() {
     updated[currentIdx] = savedPhoto;
     setPhotos(updated);
     setCapturedPhoto(null);
-    socket.emit("photo-accepted", { roomId, photoIndex: currentIdx, photo: savedPhoto });
+    if (!isSolo && socket.connected) {
+      socket.emit("photo-accepted", { roomId, photoIndex: currentIdx, photo: savedPhoto });
+    }
     const targetCount = boothData.photoCount || 4;
     if (updated.filter(Boolean).length >= targetCount) {
       setShowReview(true);
-      if (!isSolo) socket.emit("set-phase", { roomId, phase: "review" });
+      if (!isSolo && socket.connected) socket.emit("set-phase", { roomId, phase: "review" });
     } else {
       const next = updated.filter(Boolean).length;
       setPhotoIdx(next);
