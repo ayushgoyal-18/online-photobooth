@@ -632,6 +632,7 @@ export default function Room() {
   const [qrSaving, setQrSaving] = useState(false);
   const [copiedQrUrl, setCopiedQrUrl] = useState(false);
   const [isMirrored, setIsMirrored] = useState(false);
+  const [camNotice, setCamNotice] = useState("");
 
   const toggleMic = () => {
     const audioTracks = localStream.getAudioTracks();
@@ -1188,7 +1189,7 @@ export default function Room() {
       participantId: pid,
       isHost,
       rejoinToken: token,
-      config: (isHost && freshHost) ? (nav.config || merged) : undefined,
+      config: isHost ? (nav.config || merged) : undefined,
     });
   }, [roomId, isHost, freshHost]); // eslint-disable-line
 

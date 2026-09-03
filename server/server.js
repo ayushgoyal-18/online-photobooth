@@ -1,17 +1,17 @@
-const express    = require("express");
-const http       = require("http");
+const express = require("express");
+const http = require("http");
 const { Server } = require("socket.io");
-const crypto     = require("crypto");
-const cors       = require("cors");
-const mongoose   = require("mongoose");
-const helmet     = require("helmet");
-const rateLimit  = require("express-rate-limit");
-const path       = require("path");
-const os         = require("os");
+const crypto = require("crypto");
+const cors = require("cors");
+const mongoose = require("mongoose");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const path = require("path");
+const os = require("os");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const cloudinary = require("./config/cloudinary");
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
 app.disable("x-powered-by");
@@ -144,7 +144,7 @@ const memoryStrips = {};
 app.post("/api/photostrips", stripLimiter, async (req, res) => {
   try {
     let { stripId, dataUrl, theme, layout, names, caption, roomId } = req.body;
-    
+
     if (!dataUrl || typeof dataUrl !== "string" || !IMAGE_DATA_URL_RE.test(dataUrl) || dataUrl.length > MAX_STRIP_DATA_URL) {
       return res.status(400).json({ error: "Invalid photostrip image. PNG, JPEG, or WebP under 4.5MB is required." });
     }
@@ -241,7 +241,7 @@ function getLocalIp() {
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return "localhost";
 }
 
@@ -459,7 +459,7 @@ io.on("connection", (socket) => {
     );
     if (nameTaken) { socket.emit("name-taken", { name: cleanName }); return; }
     const currentCount = Object.keys(room.peers).length;
-    const maxCapacity  = getCapacity(room);
+    const maxCapacity = getCapacity(room);
     if (currentCount >= maxCapacity) { socket.emit("room-full"); return; }
 
     // CRUCIAL REQUIREMENT: Guest joins/rejoins must NEVER clear room.deletionTimer! Only host does.
@@ -488,9 +488,9 @@ io.on("connection", (socket) => {
     if (!isRoomParticipant(room, socket) || !payload?.to || !room.peers[payload.to]) return;
     io.to(payload.to).emit(event, { ...payload, from: socket.id });
   };
-  socket.on("webrtc-offer",  (payload) => relayToRoomPeer("webrtc-offer", payload));
+  socket.on("webrtc-offer", (payload) => relayToRoomPeer("webrtc-offer", payload));
   socket.on("webrtc-answer", (payload) => relayToRoomPeer("webrtc-answer", payload));
-  socket.on("webrtc-ice",    (payload) => relayToRoomPeer("webrtc-ice", payload));
+  socket.on("webrtc-ice", (payload) => relayToRoomPeer("webrtc-ice", payload));
 
   socket.on("start-countdown", (roomId) => {
     if (!checkRateLimit("countdown", 1500)) return;
@@ -622,7 +622,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     const roomId = socket.roomId;
     if (!roomId || !rooms[roomId]) return;
-    const room    = rooms[roomId];
+    const room = rooms[roomId];
     const wasHost = room.peers[socket.id]?.isHost;
     delete room.peers[socket.id];
     Object.keys(room.photos).forEach(idx => {
