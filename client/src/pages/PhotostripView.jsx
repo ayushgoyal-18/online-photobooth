@@ -14,11 +14,19 @@ export default function PhotostripView() {
   const [lanIp, setLanIp] = useState("");
   const [copiedQr, setCopiedQr] = useState(false);
 
-  const SERVER_URL = import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com";
+  const SERVER_URL = (import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com").replace(/\/+$/, "");
 
   useEffect(() => {
+    if (!stripId) {
+      setError("Photostrip not found or link has expired.");
+      setLoading(false);
+      return;
+    }
+
+    const cleanStripId = stripId.trim();
+
     // 1. Try fetching from backend API
-    fetch(`${SERVER_URL}/api/photostrips/${stripId}`)
+    fetch(`${SERVER_URL}/api/photostrips/${encodeURIComponent(cleanStripId)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Strip not found on server");
         return res.json();
@@ -28,10 +36,10 @@ export default function PhotostripView() {
         setLoading(false);
       })
       .catch(() => {
-        // 2. Fallback to localStorage gallery
+        // 2. Fallback to localStorage gallery (for local testing)
         try {
           const gallery = JSON.parse(localStorage.getItem("framoji-gallery") || "[]");
-          const found = gallery.find((g) => g.id === stripId || g.roomId === stripId);
+          const found = gallery.find((g) => g.stripId === cleanStripId || g.id === cleanStripId);
           if (found) {
             setStrip(found);
             setLoading(false);

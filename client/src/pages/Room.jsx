@@ -75,7 +75,7 @@ function fireConfetti() {
   } catch (_) { }
 }
 
-function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
+function captureFromVideo(videoEl, maxDimension = null) {
   if (!videoEl) { devWarn("[capture] no videoEl"); return null; }
   if (videoEl.readyState < 2) {
     devWarn("[capture] video not ready — readyState:", videoEl.readyState);
@@ -95,10 +95,6 @@ function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d");
-  if (isMirrored) {
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-  }
   ctx.drawImage(videoEl, 0, 0, w, h);
   const d = canvas.toDataURL("image/jpeg", maxDimension ? 0.86 : 0.92);
   devLog("[capture] ok", w, "x", h, "len:", d.length);
@@ -621,6 +617,9 @@ export default function Room() {
   const stripIdRef = useRef(
     window.crypto?.randomUUID?.() || ("strip-" + Math.random().toString(36).slice(2) + Date.now().toString(36))
   );
+  const savedCloudinaryUrlRef = useRef(null);
+  const isSavingRef = useRef(false);
+  const autoSavedRef = useRef(false);
   const [guestAuthError, setGuestAuthError] = useState("");
   const [isMicMuted, setIsMicMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(false);
@@ -733,8 +732,6 @@ export default function Room() {
   useEffect(() => { photoTargetRef.current = boothData.photoCount || 4; }, [boothData.photoCount]);
   useEffect(() => { isHostRef.current = isHostState; }, [isHostState]);
   useEffect(() => { guestNameRef.current = guestName; }, [guestName]);
-  const isMirroredRef = useRef(isMirrored);
-  useEffect(() => { isMirroredRef.current = isMirrored; }, [isMirrored]);
 
   useEffect(() => {
     let stream;
@@ -866,7 +863,7 @@ export default function Room() {
       });
     }
 
-    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280, isMirroredRef.current);
+    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280);
 
     devLog("[CAPTURE] 2 frame result]", {
       role,
@@ -1324,29 +1321,34 @@ export default function Room() {
       const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
       const dataUrl = c.toDataURL("image/png");
       const separateStripId = stripIdRef.current;
-      let cloudinaryUrl = null;
+      let cloudinaryUrl = savedCloudinaryUrlRef.current || null;
 
-      try {
-        const res = await fetch(`${SERVER_URL}/api/photostrips`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            stripId: separateStripId,
-            dataUrl,
-            theme: boothData.theme,
-            layout: boothData.layout,
-            names: stripNames,
-            caption,
-            roomId,
-          }),
-        });
-        if (res.ok) {
-          const saved = await res.json();
-          if (saved && saved.cloudinaryUrl) {
-            cloudinaryUrl = saved.cloudinaryUrl;
+      if (!cloudinaryUrl && !isSavingRef.current) {
+        isSavingRef.current = true;
+        try {
+          const res = await fetch(`${SERVER_URL}/api/photostrips`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stripId: separateStripId,
+              dataUrl,
+              theme: boothData.theme,
+              layout: boothData.layout,
+              names: stripNames,
+              caption,
+              roomId,
+            }),
+          });
+          if (res.ok) {
+            const saved = await res.json();
+            if (saved && saved.cloudinaryUrl) {
+              cloudinaryUrl = saved.cloudinaryUrl;
+              savedCloudinaryUrlRef.current = saved.cloudinaryUrl;
+            }
           }
-        }
-      } catch (e) { console.warn("[api] post error:", e); }
+        } catch (e) { console.warn("[api] post error:", e); }
+        finally { isSavingRef.current = false; }
+      }
 
       try {
         const history = JSON.parse(localStorage.getItem("framoji-gallery") || "[]");
@@ -1354,8 +1356,8 @@ export default function Room() {
           id: separateStripId,
           stripId: separateStripId,
           roomId,
-          cloudinaryUrl,
-          dataUrl: cloudinaryUrl ? undefined : dataUrl,
+          cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current,
+          dataUrl: (cloudinaryUrl || savedCloudinaryUrlRef.current) ? undefined : dataUrl,
           theme: boothData.theme,
           layout: boothData.layout,
           names: stripNames,
@@ -1365,12 +1367,19 @@ export default function Room() {
         localStorage.setItem("framoji-gallery", JSON.stringify(updated));
       } catch (err) { console.warn("[gallery] save error:", err); }
 
-      return { dataUrl, cloudinaryUrl, stripId: separateStripId };
+      return { dataUrl, cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current, stripId: separateStripId };
     } catch (err) {
       console.warn("[save] photostrip save error:", err);
       return null;
     }
   };
+
+  useEffect(() => {
+    if (showStrip && !autoSavedRef.current) {
+      autoSavedRef.current = true;
+      savePhotostripToCloudAndLocal();
+    }
+  }, [showStrip]);
 
   const openMobileQrModal = async () => {
     setShowQrModal(true);
@@ -1736,9 +1745,9 @@ export default function Room() {
                         color: isMirrored ? "var(--violet-lt)" : "var(--text)",
                         border: `1px solid ${isMirrored ? "rgba(124,58,237,0.4)" : "var(--border)"}`
                       }}
-                      title="Flip or Mirror camera"
+                      title={isMirrored ? "Switch to Real View" : "Switch to Mirror View"}
                     >
-                      <FlipHorizontal size={13} /> {isMirrored ? "Mirror View" : "Real View"}
+                      <FlipHorizontal size={13} /> {isMirrored ? "Real View" : "Mirror View"}
                     </button>
                   </div>
                   <div style={{ padding: 12 }}>
