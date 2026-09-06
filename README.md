@@ -1,51 +1,43 @@
-Framoji 🎞️
+# Framoji 🎞️
 
-One memory. Any distance.
+### One memory. Any distance.
 
-## ⚠️ WebRTC Connectivity Note
+A real-time virtual photobooth that lets people capture synchronized photos together from different locations.
 
-Framoji currently uses public STUN servers for WebRTC peer discovery. No TURN server is required for the current MVP deployment.
-
-Because TURN is not used, some users behind restrictive corporate firewalls, VPNs, or symmetric NAT configurations may be unable to establish a direct peer-to-peer connection. For the best experience, use a modern browser on standard residential or mobile connections with camera and microphone permissions enabled.
+🌐 **Live Demo:** [https://framoji-frontend.onrender.com](https://framoji-frontend.onrender.com)  
+💻 **GitHub:** [https://github.com/ayushgoyal-18/online-photobooth](https://github.com/ayushgoyal-18/online-photobooth)
 
 ---
 
 Framoji is a real-time virtual photobooth that lets people take synchronized photos together even when they are in different locations. Participants join a shared booth, connect their cameras through WebRTC, capture synchronized shots, review them, customize the final photostrip, and save/share the result.
 
-✨ Features
+---
 
-🎥 Real-time camera sharing with WebRTC
+## ✨ Features
 
-👥 Solo, Couple, and Friends/Group booth modes
+- 🎥 **Real-time camera sharing with WebRTC**
+- 🔄 **Real View / Mirror View camera toggle** (Real View by default)
+- 👥 **Solo, Couple, and Friends/Group booth modes**
+- ⏱️ **Synchronized countdown and photo capture**
+- 🖼️ **Multi-participant frame aggregation**
+- 🔄 **Room/session recovery after reconnects**
+- 🎞️ **Photostrip review and retake flow**
+- 🎨 **Filters, captions, layouts, and stickers**
+- 📥 **PNG photostrip download**
+- 📋 **Copy photostrip image to clipboard**
+- 📱 **QR-based photostrip sharing** (`/strip/:stripId` → view & download saved strip)
+- 🔗 **QR-based live booth/session joining** (`/room/:roomId` → join live session)
+- ☁️ **Automatic server-side Cloudinary storage**
+- 🗄️ **MongoDB persistence for saved photostrips**
+- 🛡️ **Helmet, CORS allowlisting, rate limiting, and input validation**
+- ♿ **Accessibility support for dialogs, labels, keyboard interaction, and reduced motion**
+- 📱 **Fully responsive camera and photostrip UI**
 
-⏱️ Synchronized countdown and photo capture
+---
 
-🖼️ Multi-participant frame aggregation
+## 🏗️ Architecture
 
-🔄 Room/session recovery after reconnects
-
-🎞️ Photostrip review and retake flow
-
-🎨 Filters, captions, layouts, and stickers
-
-📥 PNG photostrip download
-
-📋 Copy photostrip image to clipboard
-
-📱 QR/mobile sharing
-
-☁️ Server-side Cloudinary storage
-
-🗄️ MongoDB persistence for saved photostrips
-
-🛡️ Helmet, CORS allowlisting, rate limiting, input validation
-
-♿ Basic accessibility support for dialogs, labels, keyboard interaction, and reduced motion
-
-📱 Responsive camera and photostrip UI
-
-🏗️ Architecture
-
+```
                          ┌─────────────────────┐
                          │      Browser        │
                          │   React + Vite      │
@@ -72,44 +64,38 @@ Framoji is a real-time virtual photobooth that lets people take synchronized pho
              │   MongoDB   │                │ Cloudinary  │
              │ photostrips │                │ image store │
              └─────────────┘                └─────────────┘
+```
 
-Browser ↔ Browser media:
-        WebRTC peer-to-peer video/audio
+**Browser ↔ Browser media:** WebRTC peer-to-peer video/audio
 
-Main flow
+### Main Flow
 
-Host creates a booth.
+1. **Host creates a booth** and chooses Solo, Couple, or Friends mode.
+2. **Server creates and stores** the room configuration.
+3. **Guests open the room link or scan the Booth QR** (`/room/:roomId`) and enter their names.
+4. **Browser camera permissions** are requested (defaulting to unmirrored Real View).
+5. **WebRTC establishes peer-to-peer** camera connections.
+6. **Host starts the synchronized countdown**.
+7. **Each participant captures a local frame** matching their selected view orientation.
+8. **Frames are submitted to the server** and aggregated into a unified frame.
+9. **All participants receive the merged preview**.
+10. **Host accepts or retakes each shot**.
+11. **After all shots are accepted**, the host generates the photostrip.
+12. **The completed photostrip is automatically uploaded** through the backend to Cloudinary.
+13. **Photostrip metadata is persisted in MongoDB Atlas**.
+14. **Users can download the photostrip, copy it, or scan the Saved Photostrip QR** (`/strip/:stripId`) to view and download on mobile.
 
-Server creates and stores the room configuration.
+---
 
-Guests open the room link and enter their names.
+## 📁 Project Structure
 
-Browser camera permissions are requested.
-
-WebRTC establishes peer-to-peer camera connections.
-
-Host starts the synchronized countdown.
-
-Each participant captures a local frame.
-
-Frames are submitted to the server and aggregated.
-
-All participants receive the merged preview.
-
-Host accepts/retakes each shot.
-
-After all shots are accepted, the host generates the photostrip.
-
-The final strip can be customized and downloaded.
-
-The final image can be stored through the server-side Cloudinary pipeline.
-
-📁 Project Structure
-
+```
 online-photobooth/
 │
 ├── client/
 │   ├── public/
+│   │   ├── _redirects
+│   │   └── og-image.png
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Countdown.jsx
@@ -144,84 +130,64 @@ online-photobooth/
 │   └── .env.example
 │
 └── README.md
+```
 
-🧰 Tech Stack
+---
 
-Frontend
+## 🧰 Tech Stack
 
-React 19
+### Frontend
+- **React 19**
+- **Vite**
+- **React Router**
+- **Socket.IO Client**
+- **WebRTC API**
+- **Framer Motion**
+- **Lucide React**
+- **Tailwind CSS**
+- **html2canvas**
+- **canvas-confetti**
 
-Vite
+### Backend
+- **Node.js**
+- **Express**
+- **Socket.IO**
+- **MongoDB / Mongoose**
+- **Cloudinary SDK**
+- **Helmet**
+- **express-rate-limit**
+- **CORS**
 
-React Router
+### Infrastructure
+- **Render Static Sites** (Frontend SPA)
+- **Render Web Services** (Backend Node API + Socket.IO)
+- **MongoDB Atlas** (Database)
+- **Cloudinary** (Media storage & CDN)
 
-Socket.IO Client
+---
 
-WebRTC
+## 🚀 Local Development
 
-Framer Motion
-
-Lucide React
-
-Tailwind CSS
-
-html2canvas
-
-canvas-confetti
-
-Backend
-
-Node.js
-
-Express
-
-Socket.IO
-
-MongoDB / Mongoose
-
-Cloudinary
-
-Helmet
-
-express-rate-limit
-
-CORS
-
-Infrastructure
-
-GitHub
-
-Render
-
-MongoDB Atlas
-
-Cloudinary
-
-🚀 Local Development
-
-1. Clone the repository
-
-git clone <YOUR_GITHUB_REPOSITORY_URL>
+### 1. Clone the repository
+```bash
+git clone https://github.com/ayushgoyal-18/online-photobooth.git
 cd online-photobooth
+```
 
-2. Install frontend dependencies
-
+### 2. Install dependencies
+```bash
+# Frontend
 cd client
 npm install
 
-3. Install backend dependencies
-
+# Backend
 cd ../server
 npm install
+```
 
-4. Configure backend environment variables
-
-Create:
-
-server/.env
-
-Example:
-
+### 3. Configure backend environment variables
+Create `server/.env`:
+```env
 NODE_ENV=development
 PORT=5000
 
@@ -232,374 +198,120 @@ CLOUDINARY_API_KEY=<api_key>
 CLOUDINARY_API_SECRET=<api_secret>
 
 ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+```
 
-5. Configure frontend environment variables
-
-Create:
-
-client/.env
-
-Example:
-
+### 4. Configure frontend environment variables
+Create `client/.env`:
+```env
 VITE_SERVER_URL=http://localhost:5000
+```
+*(Do not put server secrets in `client/.env`. Anything prefixed with `VITE_` is exposed to the browser.)*
 
-Do not put server secrets in client/.env.
-
-Anything beginning with VITE_ is exposed to the browser.
-
-6. Start the backend
-
+### 5. Start the backend
+```bash
 cd server
 npm start
+```
+*Check health endpoint: `http://localhost:5000/health`*
 
-Expected:
-
-Framoji server on port 5000
-
-Check:
-
-http://localhost:5000/health
-
-7. Start the frontend
-
-In another terminal:
-
+### 6. Start the frontend
+In a second terminal:
+```bash
 cd client
 npm run dev
+```
+*Open in browser: `http://localhost:5173`*
 
-Open:
+---
 
-http://localhost:5173
+## 🌐 Production Deployment on Render
 
-🔐 Security
+Framoji is configured for seamless deployment on Render across two services:
 
-Framoji uses several layers of protection.
+### Backend — Render Web Service
+- **Root Directory:** `server`
+- **Runtime:** `Node`
+- **Build Command:** `npm ci`
+- **Start Command:** `npm start`
+- **Health Check Path:** `/health`
 
-HTTP security
-
-Helmet security headers
-
-x-powered-by disabled
-
-Explicit CORS allowlist in production
-
-JSON body-size limits
-
-REST API rate limiting
-
-Socket security
-
-Room operations validate:
-
-room IDs
-
-participant membership
-
-host permissions
-
-photo indexes
-
-frame size and data format
-
-countdown permissions
-
-WebRTC signaling is only relayed between registered room participants.
-
-Reconnection authentication
-
-Room reconnection should use server-issued tokens:
-
-hostToken
-guestToken
-
-Tokens are stored locally by the client and must never be hard-coded or committed to Git.
-
-Image security
-
-Photostrips are uploaded through the backend to Cloudinary.
-
-The Cloudinary API secret must remain server-side.
-
-🌐 Production Deployment on Render
-
-Framoji consists of two deployable parts:
-
-Frontend: Render Static Site
-
-Backend: Render Web Service
-
-Render supports React/Vite static sites through its Static Site service and Node/Express applications through Web Services. Client-side React Router routes need a rewrite to /index.html.
-
-Backend — Render Web Service
-
-Create a new Web Service.
-
-Recommended settings:
-
-Root Directory: server
-Runtime: Node
-Build Command: npm ci
-Start Command: npm start
-Health Check Path: /health
-
-Render requires the Node service to listen on the platform-provided port. The server uses:
-
-const PORT = process.env.PORT || 5000;
-
-Add these Render environment variables:
-
+**Environment Variables:**
+```env
 NODE_ENV=production
-MONGODB_URI=...
+MONGODB_URI=mongodb+srv://...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
-ALLOWED_ORIGINS=https://<your-frontend>.onrender.com
+ALLOWED_ORIGINS=https://framoji-frontend.onrender.com
+```
 
-Never commit these values to GitHub.
+### Frontend — Render Static Site
+- **Root Directory:** `client`
+- **Build Command:** `npm ci && npm run build`
+- **Publish Directory:** `dist`
 
-Render web services can be configured directly from a connected Git repository and automatically redeployed when the tracked branch changes.
+**Environment Variables:**
+```env
+VITE_SERVER_URL=https://framoji-backend.onrender.com
+```
 
-Frontend — Render Static Site
+**SPA Routing Rewrite (`client/public/_redirects`):**
+```
+/* /index.html 200
+```
+This ensures direct navigation and QR scanning for `/room/:roomId` and `/strip/:stripId` route smoothly through React Router.
 
-Create a new Static Site.
+---
 
-Recommended settings:
+## 🔐 Security
 
-Root Directory: client
-Build Command: npm ci && npm run build
-Publish Directory: dist
+Framoji incorporates defensive best practices across the full stack:
+- **HTTP Hardening:** Helmet security headers, `x-powered-by` disabled, strict CORS allowlisting, body size limits.
+- **Rate Limiting:** `express-rate-limit` safeguards API endpoints and photostrip creation against abuse.
+- **Socket Isolation:** Validates room IDs, participant membership, host privileges, and frame payloads.
+- **Reconnection Tokens:** Server-issued `hostToken` and `guestToken` authenticate reconnecting peers.
+- **Secret Isolation:** Cloudinary API secrets and database connection strings remain strictly server-side.
 
-Add:
+---
 
-VITE_SERVER_URL=https://<your-backend>.onrender.com
+## ⚠️ WebRTC & Production Notes
 
-Then add a Render rewrite:
+- **WebRTC Peer Discovery:** Framoji uses public STUN servers for WebRTC peer discovery without requiring a TURN relay for the MVP. Restrictive corporate firewalls or symmetric NATs may occasionally prevent P2P media connections.
+- **In-Memory Room State:** Active room state resides in server memory for low latency. For high-availability multi-instance scaling, room sessions can be moved to Redis.
+- **Render Cold Starts:** Free-tier instances may experience initial spin-up latency on first visit.
 
-Source: /*
-Destination: /index.html
-Action: Rewrite
+---
 
-This is required so direct navigation to routes such as:
+## 🧪 Verification Checklist
 
-/room/ABC123
-/strip/ABC123
-/join
-/create
+- [x] **Camera Orientation:** Default camera opens in Real View; toggle switches cleanly to Mirror View; captured photos preserve the exact orientation selected.
+- [x] **Booth Session QR:** Generates `/room/:roomId` link; scans directly into the active session without 404.
+- [x] **Saved Photostrip QR:** Generates `/strip/:stripId` link; scans directly to the dedicated Photostrip view.
+- [x] **Cloud Persistence:** Strip metadata saves to MongoDB Atlas; image uploads to Cloudinary.
+- [x] **Multi-Participant Sync:** Countdowns, camera feeds, and frame aggregation synchronize across peers.
+- [x] **Customization:** Filters, captions, layouts, and draggable stickers render accurately.
+- [x] **Download & Clipboard:** Direct PNG download and clipboard copy functions work across devices.
 
-continues to work after deployment.
+---
 
-🔑 Environment Variable Rules
+## 🛠️ Future Improvements
 
-Safe in frontend
+- ⚡ Redis-backed distributed room state
+- 🧪 Automated E2E test suite (Playwright)
+- 📐 TypeScript migration & Zod schema validation
+- 📊 Error tracking integration (Sentry)
+- 📱 Progressive Web App (PWA) installation
 
-VITE_SERVER_URL=https://api.example.com
+---
 
-Never expose in frontend
+## 📜 License
 
-MONGODB_URI
-CLOUDINARY_API_SECRET
-Only variables intentionally prefixed with VITE_ should be considered public browser configuration.
+This project is currently provided for educational and portfolio purposes.
 
-🧪 Verification Checklist
+---
 
-Before pushing to GitHub:
+## 👨‍💻 Project Status
 
-Frontend
+Framoji is a deployed full-stack real-time photobooth MVP.
 
-cd client
-npm install
-npm run lint
-npm run build
-
-Backend
-
-cd server
-npm install
-node -c server.js
-npm start
-
-Functional tests
-
-Home page loads
-
-Create Solo booth
-
-Create Couple booth
-
-Create Friends booth with 3 participants
-
-Create Friends booth with 4–6 participants
-
-Guest camera preview appears before joining
-
-Guest camera appears after joining
-
-Host camera appears
-
-Remote cameras appear
-
-Microphone toggle works
-
-Camera toggle works
-
-Camera switching works
-
-Countdown synchronizes
-
-All participants submit frames
-
-Frames aggregate correctly
-
-Host can accept a shot
-
-Host can retake a shot
-
-All photos reach review
-
-Guest sees read-only review
-
-Host generates photostrip
-
-Guest receives photostrip
-
-Photostrip does not crash
-
-Download works
-
-Copy image works
-
-QR share works
-
-New booth works
-
-Refresh during a room works
-
-Refresh during strip phase restores strip
-
-Room expires correctly after host timeout
-
-Invalid room IDs are rejected
-
-Unauthorized host reconnection is rejected
-
-Duplicate names are rejected
-
-Room capacity is enforced
-
-Photostrip API rejects oversized/invalid input
-
-📊 Performance
-
-Important optimizations:
-
-Route-level lazy loading
-
-Dynamic loading of html2canvas
-
-Dynamic loading of canvas-confetti
-
-WebRTC peer-to-peer media instead of routing video through the server
-
-Limited frame dimensions before network submission
-
-API rate limiting
-
-CDN delivery for frontend assets through Render Static Sites
-
-Avoid loading large image-generation libraries on the initial page whenever possible.
-
-♿ Accessibility
-
-The application should provide:
-
-semantic buttons
-
-associated form labels
-
-keyboard-accessible controls
-
-visible focus states
-
-dialog semantics
-
-descriptive image alt text
-
-reduced-motion support
-
-Camera and photobooth interfaces should remain usable on small screens and with reduced motion enabled.
-
-🧭 Recommended Production Architecture
-
-For a small production deployment:
-
-Render Static Site
-        │
-        │ HTTPS / WSS
-        ▼
-Render Node Web Service
-        │
-        ├── MongoDB Atlas
-        │
-        └── Cloudinary
-
-
-
-⚠️ Important Production Limitations
-
-In-memory rooms
-
-Room state currently lives in server memory.
-
-This means a server restart can remove active rooms.
-
-For a single Render instance this is acceptable for a student/MVP deployment, but it is not a horizontally scalable architecture.
-
-For multi-instance production, move room/session state to Redis or another shared store.
-
-Render free-tier cold starts
-
-Free Render web services can spin down after inactivity and start again when traffic arrives. This can affect the first connection latency.
-
-Photostrip privacy
-
-Photostrips stored on Cloudinary are accessible through their stored URL. If private memories are a requirement, implement signed/private delivery and an access-control model rather than exposing permanent public image URLs.
-
-🛠️ Future Improvements
-
-Redis-backed room state
-
-Automated E2E tests with Playwright
-
-TypeScript migration
-
-Zod schema validation
-
-Structured logging
-
-Error monitoring with Sentry
-
-CSP tuning
-
-Automated dependency/security scanning
-
-Better mobile camera controls
-
-PWA/offline support
-
-Private photostrip sharing
-
-Automatic photostrip expiry/deletion
-
-User accounts and session management
-
-📜 License
-
-Add your preferred license before publishing publicly.
-
-For a college/project submission, MIT is a simple option if you want the code to be openly reusable.
-
-👨‍💻 Project Status
-
-Framoji is a full-stack real-time photobooth MVP approaching production deployment.
-
-Before public deployment, complete the final security and functional verification checklist above and ensure the GitHub repository contains only the intended production code and no secrets.
+The application is deployed using Render, with MongoDB Atlas for persistent photostrip metadata and Cloudinary for image storage.
