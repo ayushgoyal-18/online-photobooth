@@ -95,13 +95,19 @@ app.get("/health", (req, res) => {
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/framoji";
 let isMongoConnected = false;
 
-mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
+mongoose.connect(MONGODB_URI, {
+  dbName: "framoji",
+  serverSelectionTimeoutMS: 5000,
+})
   .then(() => {
     isMongoConnected = true;
-    console.log("[db] MongoDB connected successfully");
+    console.log(
+      `[db] MongoDB connected successfully → ${mongoose.connection.name}`
+    );
   })
   .catch((err) => {
     console.error("[db] MongoDB connection failed:", err.message);
+
     if (process.env.NODE_ENV === "production") {
       process.exit(1);
     }
@@ -137,7 +143,6 @@ const PhotostripSchema = new mongoose.Schema({
 });
 
 const PhotostripModel = mongoose.model("Photostrip", PhotostripSchema);
-const memoryStrips = {};
 
 /* ── Express REST API Endpoints ── */
 
@@ -182,18 +187,23 @@ app.post("/api/photostrips", stripLimiter, async (req, res) => {
       createdAt: new Date(),
     };
 
-    memoryStrips[cleanStripId] = payload;
-
-    if (isMongoConnected) {
-      const doc = await PhotostripModel.findOneAndUpdate(
-        { stripId: cleanStripId },
-        payload,
-        { upsert: true, returnDocument: "after" }
-      );
-      return res.status(201).json(doc);
+    if (!isMongoConnected) {
+      return res.status(503).json({
+        error: "Database unavailable. Photostrip was not saved."
+      });
     }
 
-    return res.status(201).json(payload);
+    const doc = await PhotostripModel.findOneAndUpdate(
+      { stripId: cleanStripId },
+      payload,
+      { upsert: true, new: true }
+    );
+
+    console.log(
+      `[db] Photostrip saved → ${doc.stripId} in ${mongoose.connection.name}.photostrips`
+    );
+
+    return res.status(201).json(doc);
   } catch (err) {
     console.error("[api] post photostrip error:", err);
     return res.status(500).json({ error: "Failed to save photostrip" });
@@ -207,16 +217,21 @@ app.get("/api/photostrips/:stripId", async (req, res) => {
       return res.status(400).json({ error: "Invalid strip ID" });
     }
 
-    if (isMongoConnected) {
-      const doc = await PhotostripModel.findOne({ stripId });
-      if (doc) return res.json(doc);
+    if (!isMongoConnected) {
+      return res.status(503).json({
+        error: "Database unavailable"
+      });
     }
 
-    if (memoryStrips[stripId]) {
-      return res.json(memoryStrips[stripId]);
+    const doc = await PhotostripModel.findOne({ stripId });
+
+    if (!doc) {
+      return res.status(404).json({
+        error: "Photostrip not found"
+      });
     }
 
-    return res.status(404).json({ error: "Photostrip not found" });
+    return res.json(doc);
   } catch (err) {
     return res.status(500).json({ error: "Failed to fetch photostrip" });
   }
