@@ -75,7 +75,7 @@ function fireConfetti() {
   } catch (_) { }
 }
 
-function captureFromVideo(videoEl, maxDimension = null) {
+function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
   if (!videoEl) { devWarn("[capture] no videoEl"); return null; }
   if (videoEl.readyState < 2) {
     devWarn("[capture] video not ready — readyState:", videoEl.readyState);
@@ -95,6 +95,10 @@ function captureFromVideo(videoEl, maxDimension = null) {
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d");
+  if (isMirrored) {
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+  }
   ctx.drawImage(videoEl, 0, 0, w, h);
   const d = canvas.toDataURL("image/jpeg", maxDimension ? 0.86 : 0.92);
   devLog("[capture] ok", w, "x", h, "len:", d.length);
@@ -631,6 +635,8 @@ export default function Room() {
   const [qrSaving, setQrSaving] = useState(false);
   const [copiedQrUrl, setCopiedQrUrl] = useState(false);
   const [isMirrored, setIsMirrored] = useState(false);
+  const isMirroredRef = useRef(false);
+  useEffect(() => { isMirroredRef.current = isMirrored; }, [isMirrored]);
   const [camNotice, setCamNotice] = useState("");
 
   const toggleMic = () => {
@@ -863,7 +869,7 @@ export default function Room() {
       });
     }
 
-    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280);
+    const frame = captureFromVideo(video, isSoloRef.current ? null : 1280, isMirroredRef.current);
 
     devLog("[CAPTURE] 2 frame result]", {
       role,
