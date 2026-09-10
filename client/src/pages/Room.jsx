@@ -13,7 +13,7 @@ import socket from "../socket";
 import Countdown from "../components/Countdown";
 import PhotoPreview from "../components/PhotoPreview";
 import PhotoReview from "../components/PhotoReview";
-import Photostrip from "../components/Photostrip";
+import Photostrip, { FILTER_CSS } from "../components/Photostrip";
 import FilterSelector from "../components/FilterSelector";
 import StickerEditor from "../components/StickerEditor";
 
@@ -103,6 +103,82 @@ function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
   const d = canvas.toDataURL("image/jpeg", maxDimension ? 0.86 : 0.92);
   devLog("[capture] ok", w, "x", h, "len:", d.length);
   return d;
+}
+
+async function rasterizeImageWithFilter(imgSrc, filterCss) {
+  if (!filterCss || filterCss === "none" || !imgSrc) {
+    return imgSrc;
+  }
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        const width = img.naturalWidth || img.width || 640;
+        const height = img.naturalHeight || img.height || 480;
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(imgSrc);
+        ctx.filter = filterCss;
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/png"));
+      } catch (err) {
+        devWarn("[rasterizeImageWithFilter] error:", err);
+        resolve(imgSrc);
+      }
+    };
+    img.onerror = () => resolve(imgSrc);
+    img.src = imgSrc;
+  });
+}
+
+async function prepareElementForExport(el, currentFilter, currentLayout) {
+  if (!el) return () => {};
+
+  const baseFilter = FILTER_CSS[currentFilter] || "none";
+  let effectiveFilter = baseFilter;
+  if (currentLayout === "retro") {
+    effectiveFilter = baseFilter === "none"
+      ? "sepia(14%) contrast(1.04)"
+      : `${baseFilter} sepia(14%) contrast(1.04)`;
+  }
+
+  const stripEl = el.querySelector("#photostrip") || el;
+  const imgElements = Array.from(stripEl.querySelectorAll("img"));
+
+  if (!effectiveFilter || effectiveFilter === "none") {
+    return () => {};
+  }
+
+  const originalState = imgElements.map((img) => ({
+    img,
+    origSrc: img.src,
+    origFilter: img.style.filter,
+  }));
+
+  await Promise.all(
+    originalState.map(async ({ img, origSrc }) => {
+      const filteredDataUrl = await rasterizeImageWithFilter(origSrc, effectiveFilter);
+      if (filteredDataUrl && filteredDataUrl !== origSrc) {
+        img.src = filteredDataUrl;
+        img.style.filter = "none";
+        if (img.decode) {
+          try {
+            await img.decode();
+          } catch (_) {}
+        }
+      }
+    })
+  );
+
+  return () => {
+    originalState.forEach(({ img, origSrc, origFilter }) => {
+      img.src = origSrc;
+      img.style.filter = origFilter;
+    });
+  };
 }
 
 async function mergeFrames(framesObj, peerOrder = []) {
@@ -1278,22 +1354,29 @@ export default function Room() {
     setSelectedStickerId(null);
     try {
       const { default: html2canvas } = await import("html2canvas");
-      const scale = window.innerWidth < 600 ? 2 : 3;
-      const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
-      c.toBlob(async (blob) => {
-        if (!blob) return;
-        try {
-          await navigator.clipboard.write([
-            new ClipboardItem({ [blob.type]: blob })
-          ]);
-          setCopiedImage(true);
-          setTimeout(() => setCopiedImage(false), 2500);
-        } catch (_) {
-          navigator.clipboard.writeText(window.location.href);
-          setCopiedImage(true);
-          setTimeout(() => setCopiedImage(false), 2500);
-        }
-      });
+      const el = photostripExportRef.current || document.getElementById("photostrip-export");
+      if (!el) return;
+      const restore = await prepareElementForExport(el, filter, boothData.layout);
+      try {
+        const scale = window.innerWidth < 600 ? 2 : 3;
+        const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
+        c.toBlob(async (blob) => {
+          if (!blob) return;
+          try {
+            await navigator.clipboard.write([
+              new ClipboardItem({ [blob.type]: blob })
+            ]);
+            setCopiedImage(true);
+            setTimeout(() => setCopiedImage(false), 2500);
+          } catch (_) {
+            navigator.clipboard.writeText(window.location.href);
+            setCopiedImage(true);
+            setTimeout(() => setCopiedImage(false), 2500);
+          }
+        });
+      } finally {
+        restore();
+      }
     } catch (err) {
       console.error("[clipboard] copy failed:", err);
     }
@@ -1323,9 +1406,15 @@ export default function Room() {
       const { default: html2canvas } = await import("html2canvas");
       const el = photostripExportRef.current || document.getElementById("photostrip-export");
       if (!el) return null;
-      const scale = window.innerWidth < 600 ? 2 : 3;
-      const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
-      const dataUrl = c.toDataURL("image/png");
+      const restore = await prepareElementForExport(el, filter, boothData.layout);
+      let dataUrl = null;
+      try {
+        const scale = window.innerWidth < 600 ? 2 : 3;
+        const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
+        dataUrl = c.toDataURL("image/png");
+      } finally {
+        restore();
+      }
       const separateStripId = stripIdRef.current;
       let cloudinaryUrl = savedCloudinaryUrlRef.current || null;
 
@@ -1741,7 +1830,13 @@ export default function Room() {
                       <RefreshCw size={13} /> Switch Cam
                     </button>
                     <button
-                      onClick={() => setIsMirrored(prev => !prev)}
+                      onClick={() => {
+                        setIsMirrored(prev => {
+                          const next = !prev;
+                          isMirroredRef.current = next;
+                          return next;
+                        });
+                      }}
                       className="btn btn-ghost"
                       style={{
                         padding: "6px 14px",

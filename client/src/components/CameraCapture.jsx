@@ -1,6 +1,6 @@
 import Webcam from "react-webcam";
 
-export default function CameraCapture({ webcamRef, onReady }) {
+export default function CameraCapture({ webcamRef, onReady, isMirrored = false }) {
   return (
     <div className="card" style={{ overflow: "hidden" }}>
       <div
@@ -23,7 +23,7 @@ export default function CameraCapture({ webcamRef, onReady }) {
         ref={webcamRef}
         screenshotFormat="image/png"
         style={{ width: "100%", display: "block" }}
-        mirrored
+        mirrored={isMirrored}
         onUserMedia={onReady}
       />
     </div>

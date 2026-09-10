@@ -1,4 +1,4 @@
-const FILTER_CSS = {
+export const FILTER_CSS = {
   original: "none",
   grayscale: "grayscale(100%)",
   sepia: "sepia(90%)",
