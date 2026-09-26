@@ -717,6 +717,8 @@ export default function Room() {
   const [camErrorDetails, setCamErrorDetails] = useState(null);
   const [toast, setToast] = useState(null);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [copiedImage, setCopiedImage] = useState(false);
   const [roomNotFound, setRoomNotFound] = useState(false);
   const [roomFull, setRoomFull] = useState(false);
   const [roomEnded, setRoomEnded] = useState(false);
@@ -1516,9 +1518,6 @@ export default function Room() {
     trackEvent("photostrip_generated", { theme: boothData.theme, layout: boothData.layout });
     if (!boothData.isSolo) socket.emit("set-phase", { roomId, phase: "strip" });
   };
-
-  const [showQrModal, setShowQrModal] = useState(false);
-  const [copiedImage, setCopiedImage] = useState(false);
 
   const copyImageToClipboard = async () => {
     setSelectedStickerId(null);
