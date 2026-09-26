@@ -35,6 +35,7 @@ export default function Photostrip({
   caption = "",
 }) {
   const t = THEMES[theme] || THEMES.friends;
+  const flt = FILTER_CSS[selectedFilter] || "none";
   const rawDisplayName = allNames || (participant2 ? `${participant1} × ${participant2}` : participant1);
   const displayName = typeof rawDisplayName === "string" ? rawDisplayName.slice(0, 100) : "";
   const dateLine = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
