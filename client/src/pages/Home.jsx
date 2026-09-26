@@ -6,6 +6,7 @@ import {
   Heart, UserCircle, Trash2, Images, X, Sparkles,
 } from "lucide-react";
 import { trackEvent } from "../utils/analytics";
+import { downloadImage } from "../utils/download";
 import LegalModal from "../components/LegalModal";
 
 const FEATURES = [
@@ -205,21 +206,7 @@ export default function Home() {
 
     trackEvent("download_clicked", { source: "home_gallery_modal" });
     try {
-      const res = await fetch(targetUrl);
-      if (!res.ok) throw new Error("Download failed");
-
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = `framoji-${item.roomId || item.stripId || "strip"}.png`;
-
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      URL.revokeObjectURL(blobUrl);
+      await downloadImage(targetUrl, `framoji-${item.roomId || item.stripId || "strip"}.png`);
     } catch {
       window.open(targetUrl, "_blank", "noopener,noreferrer");
     }

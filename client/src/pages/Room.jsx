@@ -922,7 +922,7 @@ export default function Room() {
   const justReconnectedRef = useRef(true); // true on mount so first peers-updated rebuilds WebRTC
   const shouldInitiateOffersRef = useRef(false);
   const mySocketIdRef = useRef(socket.id || "");
-  const [mySocketId, setMySocketId] = useState(socket.id || "");
+  const [, setMySocketId] = useState(socket.id || "");
 
   useEffect(() => { photoIdxRef.current = photoIdx; }, [photoIdx]);
   useEffect(() => { isSoloRef.current = boothData.isSolo; }, [boothData.isSolo]);

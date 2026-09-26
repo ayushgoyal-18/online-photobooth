@@ -387,8 +387,9 @@ function sanitizeMetadata(input, depth = 0) {
   for (const [k, v] of Object.entries(input)) {
     if (++keyCount > 15) break;
     const cleanKey = String(k).slice(0, 30);
+    if (/token|password|secret|auth|credit|cookie/i.test(cleanKey)) continue;
     if (typeof v === "string") {
-      if (v.length <= 60 && !v.startsWith("data:") && !v.includes("token") && !v.includes("password")) {
+      if (v.length <= 60 && !v.startsWith("data:") && !/token|password|secret|auth/i.test(v)) {
         clean[cleanKey] = v;
       }
     } else if (typeof v === "number" || typeof v === "boolean") {
