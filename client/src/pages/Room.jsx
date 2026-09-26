@@ -16,6 +16,9 @@ import PhotoReview from "../components/PhotoReview";
 import Photostrip, { FILTER_CSS } from "../components/Photostrip";
 import FilterSelector from "../components/FilterSelector";
 import StickerEditor from "../components/StickerEditor";
+import { trackEvent } from "../utils/analytics";
+import { downloadImage } from "../utils/download";
+import QRCode from "qrcode";
 
 const devLog = (...args) => {
   if (import.meta.env.DEV) console.log(...args);
@@ -103,6 +106,16 @@ function captureFromVideo(videoEl, maxDimension = null, isMirrored = false) {
   const d = canvas.toDataURL("image/jpeg", maxDimension ? 0.86 : 0.92);
   devLog("[capture] ok", w, "x", h, "len:", d.length);
   return d;
+}
+
+function isValidHttpUrl(value) {
+  if (!value || typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 async function rasterizeImageWithFilter(imgSrc, filterCss) {
@@ -249,9 +262,16 @@ function useWebRTC() {
     Object.entries(peersRef.current).forEach(([peerId, pc]) => {
       if (pc.signalingState === "closed") return;
       const senders = pc.getSenders();
-      stream.getTracks().forEach(track => {
-        const already = senders.some(s => s.track?.id === track.id);
-        if (!already) { pc.addTrack(track, stream); devLog("[rtc] late track to", peerId); }
+      stream.getTracks().forEach((track) => {
+        const sender = senders.find((s) => s.track?.kind === track.kind);
+        if (sender) {
+          sender.replaceTrack(track).catch((err) => {
+            devWarn("[rtc] replaceTrack failed for peer:", peerId, err.message);
+          });
+        } else {
+          pc.addTrack(track, stream);
+          devLog("[rtc] late track to", peerId);
+        }
       });
     });
   }, []);
@@ -277,6 +297,9 @@ function useWebRTC() {
     };
     pc.onconnectionstatechange = () => {
       devLog("[rtc]", pc.connectionState, peerId);
+      if (pc.connectionState === "failed") {
+        trackEvent("peer_connection_failed", { reason: "connection_state_failed" });
+      }
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         delete peersRef.current[peerId]; delete negotiatingRef.current[peerId];
         delete iceCandidateQueueRef.current[peerId];
@@ -403,7 +426,14 @@ function useWebRTC() {
     iceCandidateQueueRef.current = {}; setRemoteStreams({});
   }, []);
 
-  return { remoteStreams, cleanupPeers, setStream, createOfferForPeer };
+  const cleanupStream = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+  }, []);
+
+  return { remoteStreams, cleanupPeers, cleanupStream, setStream, createOfferForPeer };
 }
 
 function LocalCameraView({ stream, videoRef, isMirrored = false }) {
@@ -449,10 +479,21 @@ function RemoteVideo({ stream, name }) {
   );
 }
 
-function InvitePanel({ roomId, boothData, peerList }) {
+function InvitePanel({ roomId, boothData, peerList, showToast }) {
   const [copied, setCopied] = useState(false);
   const link = `${window.location.origin}/room/${roomId}`;
-  const copy = () => { navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      showToast?.("Clipboard access was denied.", "error");
+    }
+  };
   const share = () => { if (navigator.share) navigator.share({ title: "Join my Framoji booth!", url: link }).catch(() => { }); else copy(); };
   const isDuo = boothData.modeConfig?.participants === "duo";
   const maxCapacity = boothData.friendCount || (isDuo ? 2 : 1);
@@ -507,7 +548,7 @@ function InvitePanel({ roomId, boothData, peerList }) {
   );
 }
 
-function GuestNameScreen({ boothData, onJoin, localStream, authError }) {
+function GuestNameScreen({ boothData, onJoin, localStream, authError, isMirrored = false }) {
   const isCoupleMode = boothData?.theme === "couple";
   const [name, setName] = useState(isCoupleMode ? (boothData?.participant2 || "") : "");
   const [err, setErr] = useState("");
@@ -566,7 +607,13 @@ function GuestNameScreen({ boothData, onJoin, localStream, authError }) {
               autoPlay
               playsInline
               muted
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: localStream ? "block" : "none" }}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: localStream ? "block" : "none",
+                transform: isMirrored ? "scaleX(-1)" : "none",
+              }}
             />
             {!localStream && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-sub)", fontSize: 12 }}>
@@ -664,16 +711,29 @@ export default function Room() {
   const [localStream, setLocalStream] = useState(null);
   const localVideoRef = useRef(null);
   const hiddenVideoRef = useRef(null);
-  const { remoteStreams, cleanupPeers, setStream, createOfferForPeer } = useWebRTC();
+  const { remoteStreams, cleanupPeers, cleanupStream, setStream, createOfferForPeer } = useWebRTC();
 
   const [peerList, setPeerList] = useState([]);
-  const [camError, setCamError] = useState(false);
+  const [camErrorDetails, setCamErrorDetails] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [roomNotFound, setRoomNotFound] = useState(false);
   const [roomFull, setRoomFull] = useState(false);
   const [roomEnded, setRoomEnded] = useState(false);
   const [hostDisconnected, setHostDisconnected] = useState(false);
   const [hostLeft, setHostLeft] = useState(false);
   const [isHostState, setIsHostState] = useState(isHost);
+
+  const showToast = useCallback((message, type = "info") => {
+    setToast({ message, type, id: Date.now() });
+  }, []);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3200);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const [countdown, setCountdown] = useState(null);
   const [flash, setFlash] = useState(false);
@@ -686,7 +746,7 @@ export default function Room() {
   const [photos, setPhotos] = useState(savedSession.photos || []);
   const [showReview, setShowReview] = useState(savedSession.showReview || false);
   const [showStrip, setShowStrip] = useState(savedSession.showStrip || false);
-  const [capturedPhoto, setCapturedPhoto] = useState(savedSession.capturedPhoto || null);
+  const [capturedPhoto, setCapturedPhoto] = useState(null);
 
   const [filter, setFilter] = useState(savedSession.filter || "original");
   const [stickers, setStickers] = useState(savedSession.stickers || []);
@@ -695,11 +755,35 @@ export default function Room() {
   const [downloading, setDown] = useState(false);
   const photostripExportRef = useRef(null);
   const stripIdRef = useRef(
-    window.crypto?.randomUUID?.() || ("strip-" + Math.random().toString(36).slice(2) + Date.now().toString(36))
+    (() => {
+      try {
+        const key = `framoji-strip-id-${roomId}`;
+        let id = sessionStorage.getItem(key);
+        if (!id) {
+          id = window.crypto?.randomUUID?.() || ("strip-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+          sessionStorage.setItem(key, id);
+        }
+        return id;
+      } catch {
+        return window.crypto?.randomUUID?.() || ("strip-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+      }
+    })()
   );
   const savedCloudinaryUrlRef = useRef(null);
-  const isSavingRef = useRef(false);
-  const autoSavedRef = useRef(false);
+  const savedDataUrlRef = useRef(null);
+  const contentRevisionRef = useRef(0);
+  const lastSavedRevisionRef = useRef(-1);
+  const savePromiseRef = useRef(null);
+  const stripEditTokenRef = useRef(
+    (() => {
+      try {
+        const key = `framoji-edit-token-${roomId}`;
+        return sessionStorage.getItem(key) || null;
+      } catch {
+        return null;
+      }
+    })()
+  );
   const [guestAuthError, setGuestAuthError] = useState("");
   const [isMicMuted, setIsMicMuted] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(false);
@@ -710,12 +794,30 @@ export default function Room() {
   const [qrTab, setQrTab] = useState("strip");
   const [qrSaving, setQrSaving] = useState(false);
   const [copiedQrUrl, setCopiedQrUrl] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState("");
   const [isMirrored, setIsMirrored] = useState(false);
+
+  // Keyboard Escape listener to close open modals
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        if (showQrModal) setShowQrModal(false);
+        if (showLeaveModal) setShowLeaveModal(false);
+        if (showReview) setShowReview(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showQrModal, showLeaveModal, showReview]);
   const isMirroredRef = useRef(false);
   useEffect(() => { isMirroredRef.current = isMirrored; }, [isMirrored]);
   const [camNotice, setCamNotice] = useState("");
 
   const toggleMic = () => {
+    if (!localStream) {
+      showToast("Camera is still starting. Please wait a moment.", "warning");
+      return;
+    }
     const audioTracks = localStream.getAudioTracks();
     if (audioTracks.length === 0) {
       navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(audioStream => {
@@ -763,8 +865,14 @@ export default function Room() {
         audio: !isMicMuted,
       });
 
+      if (isVideoOff) {
+        newStream.getVideoTracks().forEach(track => {
+          track.enabled = false;
+        });
+      }
+
       if (localStream) {
-        localStream.getVideoTracks().forEach(t => t.stop());
+        localStream.getTracks().forEach(t => t.stop());
       }
       setLocalStream(newStream);
       setStream(newStream);
@@ -777,7 +885,12 @@ export default function Room() {
         video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: nextMode },
         audio: !isMicMuted,
       }).then(newStream => {
-        if (localStream) localStream.getVideoTracks().forEach(t => t.stop());
+        if (isVideoOff) {
+          newStream.getVideoTracks().forEach(track => {
+            track.enabled = false;
+          });
+        }
+        if (localStream) localStream.getTracks().forEach(t => t.stop());
         setLocalStream(newStream);
         setStream(newStream);
         if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
@@ -791,10 +904,10 @@ export default function Room() {
   useEffect(() => {
     try {
       localStorage.setItem(`framoji-session-${roomId}`, JSON.stringify({
-        photos, photoIdx, showReview, showStrip, capturedPhoto, filter, stickers, caption,
+        photos, photoIdx, showReview, showStrip, filter, stickers, caption,
       }));
     } catch (_) { }
-  }, [photos, photoIdx, showReview, showStrip, capturedPhoto, filter, stickers, caption]); // eslint-disable-line
+  }, [photos, photoIdx, showReview, showStrip, filter, stickers, caption]); // eslint-disable-line
 
   const photoIdxRef = useRef(photoIdx);
   const isSoloRef = useRef(boothData.isSolo);
@@ -815,18 +928,28 @@ export default function Room() {
   useEffect(() => { isHostRef.current = isHostState; }, [isHostState]);
   useEffect(() => { guestNameRef.current = guestName; }, [guestName]);
 
-  useEffect(() => {
-    let stream;
+  const initCamera = useCallback(() => {
+    setCamErrorDetails(null);
+    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+      trackEvent("camera_permission_denied", { reason: "browser_unsupported" });
+      setCamErrorDetails({
+        type: "UNSUPPORTED",
+        title: "Browser Unsupported",
+        message: "Your browser does not support WebRTC camera features. Please use the latest Chrome, Safari, or Edge.",
+      });
+      return;
+    }
+
     navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
       audio: true,
     })
       .then(s => {
-        stream = s;
         s.getAudioTracks().forEach(t => { t.enabled = false; });
         setLocalStream(s); setStream(s);
         if (localVideoRef.current) localVideoRef.current.srcObject = s;
         if (hiddenVideoRef.current) hiddenVideoRef.current.srcObject = s;
+        trackEvent("camera_permission_granted");
         devLog("[cam] ready:", s.getVideoTracks()[0]?.label, "| audio tracks:", s.getAudioTracks().length);
       })
       .catch(err => {
@@ -835,13 +958,45 @@ export default function Room() {
           video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
           audio: false,
         }).then(s => {
-          stream = s; setLocalStream(s); setStream(s);
+          setLocalStream(s); setStream(s);
           if (localVideoRef.current) localVideoRef.current.srcObject = s;
           if (hiddenVideoRef.current) hiddenVideoRef.current.srcObject = s;
-        }).catch(e => { console.error("[cam] failed completely:", e); setCamError(true); });
+          trackEvent("camera_permission_granted");
+        }).catch(e => {
+          console.error("[cam] failed completely:", e);
+          let title = "Camera Access Needed";
+          let message = "Allow camera access in your browser settings, then try again.";
+          if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+            title = "Camera Permission Blocked";
+            message = "Your browser blocked camera access. Click the camera icon in your address bar to allow permissions, then click Try Again.";
+            trackEvent("camera_permission_denied", { error: e.name });
+          } else if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+            title = "No Camera Detected";
+            message = "We couldn't detect a camera on this device. Please connect a webcam or enable camera drivers.";
+            trackEvent("camera_not_found", { error: e.name });
+          } else if (e.name === "NotReadableError" || e.name === "TrackStartError") {
+            title = "Camera Already in Use";
+            message = "Another application (such as Zoom, Teams, or another tab) is currently using your camera. Please close it and retry.";
+            trackEvent("camera_in_use", { error: e.name });
+          } else {
+            trackEvent("camera_permission_denied", { error: e.name || "unknown" });
+          }
+          setCamErrorDetails({ type: e.name, title, message });
+        });
       });
-    return () => { stream?.getTracks().forEach(t => t.stop()); cleanupPeers(); };
-  }, []); // eslint-disable-line
+  }, [setStream]);
+
+  useEffect(() => {
+    initCamera();
+    return () => {
+      cleanupPeers();
+      cleanupStream();
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+      setLocalStream(null);
+    };
+  }, [initCamera, cleanupPeers, cleanupStream]);
 
   useEffect(() => {
     if (localStream && localVideoRef.current) {
@@ -1033,6 +1188,9 @@ export default function Room() {
 
     socket.on("peers-updated", (list) => {
       devLog("[socket] peers:", list.map(p => `${p.name}${p.isHost ? " (host)" : ""}`).join(", "));
+      if (list.length > peerList.length) {
+        trackEvent("participant_joined", { count: list.length });
+      }
       setPeerList(list);
       if (list.some(p => p.isHost)) setHostDisconnected(false);
       if (socket.id && !mySocketIdRef.current) {
@@ -1187,7 +1345,10 @@ export default function Room() {
       setHostLeft(true);
     });
     socket.on("room-ended", () => setRoomEnded(true));
-    socket.on("room-not-found", () => setRoomNotFound(true));
+    socket.on("room-not-found", () => {
+      setRoomNotFound(true);
+      trackEvent("room_not_found");
+    });
     socket.on("host-token", (token) => {
       tokenRef.current = token;
       try { localStorage.setItem(`framoji-token-${roomId}`, token); } catch (_) {}
@@ -1200,6 +1361,7 @@ export default function Room() {
 
     socket.on("host-auth-failed", () => {
       devWarn("[socket] host auth failed — invalid host token");
+      trackEvent("join_failed", { reason: "host_auth_failed" });
       joinedRef.current = false;
       setIsHostState(false);
       isHostRef.current = false;
@@ -1207,6 +1369,7 @@ export default function Room() {
 
     socket.on("guest-auth-failed", (data) => {
       devWarn("[socket] guest auth failed — invalid or expired token");
+      trackEvent("join_failed", { reason: "guest_auth_failed" });
       joinedRef.current = false;
       tokenRef.current = "";
       try { localStorage.removeItem(`framoji-token-${roomId}`); } catch (_) {}
@@ -1217,6 +1380,7 @@ export default function Room() {
     });
 
     socket.on("name-taken", () => {
+      trackEvent("join_failed", { reason: "name_taken" });
       joinedRef.current = false;
       setNameConfirmed(false);
       setGuestName("");
@@ -1224,6 +1388,7 @@ export default function Room() {
     });
 
     socket.on("room-full", () => {
+      trackEvent("join_failed", { reason: "room_full" });
       joinedRef.current = false;
       setRoomFull(true);
     });
@@ -1306,6 +1471,9 @@ export default function Room() {
 
   const startShot = () => {
     getAudioCtx();
+    if (validPhotos.length === 0) {
+      trackEvent("booth_started", { theme: boothData.theme, isSolo: !!boothData.isSolo });
+    }
     if (isSolo || isSoloRef.current || isSoloMode) {
       runCountdown();
       return;
@@ -1320,6 +1488,7 @@ export default function Room() {
     updated[currentIdx] = savedPhoto;
     setPhotos(updated);
     setCapturedPhoto(null);
+    trackEvent("photo_captured", { photoIndex: currentIdx });
     if (!isSolo && socket.connected) {
       socket.emit("photo-accepted", { roomId, photoIndex: currentIdx, photo: savedPhoto });
     }
@@ -1344,6 +1513,7 @@ export default function Room() {
 
   const onStripDone = () => {
     setShowReview(false); setShowStrip(true); fireConfetti();
+    trackEvent("photostrip_generated", { theme: boothData.theme, layout: boothData.layout });
     if (!boothData.isSolo) socket.emit("set-phase", { roomId, phase: "strip" });
   };
 
@@ -1352,6 +1522,7 @@ export default function Room() {
 
   const copyImageToClipboard = async () => {
     setSelectedStickerId(null);
+    trackEvent("share_clicked", { type: "copy_image" });
     try {
       const { default: html2canvas } = await import("html2canvas");
       const el = photostripExportRef.current || document.getElementById("photostrip-export");
@@ -1369,9 +1540,12 @@ export default function Room() {
             setCopiedImage(true);
             setTimeout(() => setCopiedImage(false), 2500);
           } catch (_) {
-            navigator.clipboard.writeText(window.location.href);
-            setCopiedImage(true);
-            setTimeout(() => setCopiedImage(false), 2500);
+            try {
+              await navigator.clipboard.writeText(window.location.href);
+              showToast("Photostrip link copied to clipboard!", "info");
+            } catch {
+              showToast("Clipboard access denied.", "error");
+            }
           }
         });
       } finally {
@@ -1385,7 +1559,9 @@ export default function Room() {
   const SERVER_URL = import.meta.env.VITE_SERVER_URL || "https://framoji-backend.onrender.com";
 
   const allPeerNames = peerList.map(p => p.name).filter(Boolean);
-  const stripNames = allPeerNames.length > 0 ? allPeerNames.join(" · ") : boothData.participant1;
+  const stripNames = allPeerNames.length > 0
+    ? allPeerNames.map(n => (n || "").trim().slice(0, 30)).filter(Boolean).join(" · ").slice(0, 100)
+    : (boothData.participant1 || "").trim().slice(0, 30);
 
   // Fetch local machine's LAN IP only in development when testing on localhost
   useEffect(() => {
@@ -1401,99 +1577,198 @@ export default function Room() {
     }
   }, [SERVER_URL]);
 
-  const savePhotostripToCloudAndLocal = async () => {
-    try {
-      const { default: html2canvas } = await import("html2canvas");
-      const el = photostripExportRef.current || document.getElementById("photostrip-export");
-      if (!el) return null;
-      const restore = await prepareElementForExport(el, filter, boothData.layout);
-      let dataUrl = null;
-      try {
-        const scale = window.innerWidth < 600 ? 2 : 3;
-        const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
-        dataUrl = c.toDataURL("image/png");
-      } finally {
-        restore();
-      }
-      const separateStripId = stripIdRef.current;
-      let cloudinaryUrl = savedCloudinaryUrlRef.current || null;
+  useEffect(() => {
+    if (!showQrModal) return;
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    const origin = isLocal && lanIp
+      ? `http://${lanIp}:${window.location.port || "5173"}`
+      : window.location.origin;
+    const computedUrl = qrTab === "strip"
+      ? `${origin}/strip/${stripIdRef.current}`
+      : `${origin}/room/${roomId}`;
+    const activeUrl = customQrUrl.trim() && isValidHttpUrl(customQrUrl.trim())
+      ? customQrUrl.trim()
+      : computedUrl;
 
-      if (!cloudinaryUrl && !isSavingRef.current) {
-        isSavingRef.current = true;
+    QRCode.toDataURL(activeUrl, { width: 180, margin: 1, color: { dark: "#000000", light: "#ffffff" } })
+      .then(setQrCodeDataUrl)
+      .catch((err) => devWarn("[qrcode] generation failed:", err));
+  }, [showQrModal, qrTab, customQrUrl, lanIp, roomId]);
+
+  const performSaveLoop = async () => {
+    let result = {
+      dataUrl: savedDataUrlRef.current,
+      cloudinaryUrl: savedCloudinaryUrlRef.current,
+      stripId: stripIdRef.current,
+    };
+
+    while (lastSavedRevisionRef.current !== contentRevisionRef.current) {
+      const revisionAtStart = contentRevisionRef.current;
+      try {
+        const { default: html2canvas } = await import("html2canvas");
+        const el = photostripExportRef.current || document.getElementById("photostrip-export");
+        if (!el) return result;
+        const restore = await prepareElementForExport(el, filter, boothData.layout);
+        let dataUrl = null;
         try {
-          const res = await fetch(`${SERVER_URL}/api/photostrips`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              stripId: separateStripId,
-              dataUrl,
-              theme: boothData.theme,
-              layout: boothData.layout,
-              names: stripNames,
-              caption,
-              roomId,
-            }),
-          });
-          if (res.ok) {
-            const saved = await res.json();
-            if (saved && saved.cloudinaryUrl) {
-              cloudinaryUrl = saved.cloudinaryUrl;
-              savedCloudinaryUrlRef.current = saved.cloudinaryUrl;
+          const scale = window.innerWidth < 600 ? 2 : 3;
+          const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
+          dataUrl = c.toDataURL("image/png");
+        } finally {
+          restore();
+        }
+        const separateStripId = stripIdRef.current;
+        let cloudinaryUrl = savedCloudinaryUrlRef.current || null;
+        const needsCloudSave = !savedCloudinaryUrlRef.current || savedDataUrlRef.current !== dataUrl;
+
+        if (needsCloudSave) {
+          try {
+            const res = await fetch(`${SERVER_URL}/api/photostrips`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(stripEditTokenRef.current ? { "X-Strip-Edit-Token": stripEditTokenRef.current } : {}),
+              },
+              body: JSON.stringify({
+                stripId: separateStripId,
+                dataUrl,
+                theme: boothData.theme,
+                layout: boothData.layout,
+                names: stripNames,
+                caption,
+                roomId,
+              }),
+            });
+            if (res.status === 429) {
+              showToast("You're saving too fast. Please wait a moment.", "warning");
+            } else if (res.ok) {
+              const saved = await res.json();
+              if (saved && saved.cloudinaryUrl) {
+                cloudinaryUrl = saved.cloudinaryUrl;
+                savedCloudinaryUrlRef.current = saved.cloudinaryUrl;
+                savedDataUrlRef.current = dataUrl;
+              }
+              if (saved && saved.editToken) {
+                stripEditTokenRef.current = saved.editToken;
+                try {
+                  sessionStorage.setItem(`framoji-edit-token-${roomId}`, saved.editToken);
+                } catch (_) { }
+              }
             }
-          }
-        } catch (e) { console.warn("[api] post error:", e); }
-        finally { isSavingRef.current = false; }
+          } catch (e) { console.warn("[api] post error:", e); }
+        }
+
+        try {
+          const history = JSON.parse(localStorage.getItem("framoji-gallery") || "[]");
+          const entry = {
+            id: separateStripId,
+            stripId: separateStripId,
+            roomId,
+            cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current,
+            dataUrl: (cloudinaryUrl || savedCloudinaryUrlRef.current) ? undefined : dataUrl,
+            theme: boothData.theme,
+            layout: boothData.layout,
+            names: stripNames,
+            createdAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+          };
+          const updated = [entry, ...history.filter(h => h.stripId !== separateStripId && h.roomId !== roomId)].slice(0, 15);
+          localStorage.setItem("framoji-gallery", JSON.stringify(updated));
+        } catch (err) { console.warn("[gallery] save error:", err); }
+
+        lastSavedRevisionRef.current = revisionAtStart;
+        result = { dataUrl, cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current, stripId: separateStripId };
+      } catch (err) {
+        console.warn("[save] photostrip save error:", err);
+        trackEvent("photostrip_save_failed", { error: err.message || "render_error" });
+        return result;
       }
-
-      try {
-        const history = JSON.parse(localStorage.getItem("framoji-gallery") || "[]");
-        const entry = {
-          id: separateStripId,
-          stripId: separateStripId,
-          roomId,
-          cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current,
-          dataUrl: (cloudinaryUrl || savedCloudinaryUrlRef.current) ? undefined : dataUrl,
-          theme: boothData.theme,
-          layout: boothData.layout,
-          names: stripNames,
-          createdAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        };
-        const updated = [entry, ...history.filter(h => h.stripId !== separateStripId && h.roomId !== roomId)].slice(0, 15);
-        localStorage.setItem("framoji-gallery", JSON.stringify(updated));
-      } catch (err) { console.warn("[gallery] save error:", err); }
-
-      return { dataUrl, cloudinaryUrl: cloudinaryUrl || savedCloudinaryUrlRef.current, stripId: separateStripId };
-    } catch (err) {
-      console.warn("[save] photostrip save error:", err);
-      return null;
     }
+
+    return result;
+  };
+
+  const savePhotostripToCloudAndLocal = async () => {
+    if (savePromiseRef.current) {
+      return savePromiseRef.current;
+    }
+    const promise = (async () => {
+      try {
+        return await performSaveLoop();
+      } finally {
+        if (savePromiseRef.current === promise) {
+          savePromiseRef.current = null;
+        }
+      }
+    })();
+    savePromiseRef.current = promise;
+    return promise;
   };
 
   useEffect(() => {
-    if (showStrip && !autoSavedRef.current) {
-      autoSavedRef.current = true;
-      savePhotostripToCloudAndLocal();
+    if (showStrip) {
+      contentRevisionRef.current += 1;
     }
-  }, [showStrip]);
+  }, [showStrip, filter, caption, stickers]);
+
+  useEffect(() => {
+    if (!showStrip) return;
+
+    const timer = setTimeout(() => {
+      savePhotostripToCloudAndLocal();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [showStrip, filter, caption, stickers]);
 
   const openMobileQrModal = async () => {
-    setShowQrModal(true);
     setQrSaving(true);
-    await savePhotostripToCloudAndLocal();
-    setQrSaving(false);
+    trackEvent("qr_opened", { source: "room" });
+    try {
+      const saved = await savePhotostripToCloudAndLocal();
+      if (!saved?.cloudinaryUrl) {
+        trackEvent("qr_share_failed");
+        showToast("We couldn't save the photostrip yet. Please try again.", "error");
+        return;
+      }
+      setShowQrModal(true);
+    } catch (err) {
+      trackEvent("qr_share_failed");
+      showToast("Unable to prepare the QR code.", "error");
+    } finally {
+      setQrSaving(false);
+    }
   };
 
   const downloadStrip = async () => {
     setSelectedStickerId(null);
     setDown(true);
+    trackEvent("download_clicked", { source: "room", layout: boothData.layout });
     try {
       const saved = await savePhotostripToCloudAndLocal();
-      if (saved?.dataUrl) {
-        const a = document.createElement("a");
-        a.download = `framoji-${roomId}.png`;
-        a.href = saved.dataUrl;
-        a.click();
+      const targetUrl = saved?.cloudinaryUrl || saved?.dataUrl;
+      if (targetUrl) {
+        await downloadImage(targetUrl, `framoji-${roomId}.png`);
+      } else {
+        trackEvent("download_failed", { reason: "no_data_url" });
       }
+    } catch (err) {
+      trackEvent("download_failed", { error: err.message });
+      // Fallback direct html2canvas trigger if needed
+      try {
+        const el = photostripExportRef.current || document.getElementById("photostrip-export");
+        if (el) {
+          const { default: html2canvas } = await import("html2canvas");
+          const restore = await prepareElementForExport(el, filter, boothData.layout);
+          try {
+            const scale = window.innerWidth < 600 ? 2 : 3;
+            const c = await html2canvas(el, { useCORS: true, scale, backgroundColor: null });
+            const fallbackDataUrl = c.toDataURL("image/png");
+            await downloadImage(fallbackDataUrl, `framoji-${roomId}.png`);
+          } finally {
+            restore();
+          }
+        }
+      } catch (_) { }
     } finally { setDown(false); }
   };
 
@@ -1505,7 +1780,8 @@ export default function Room() {
   const modeLabel = ({ solo: "Solo Session", couple: "Couple Booth", friends: "Friends & Family Booth" })[boothData.theme] || "Session";
   const requiredPeers = isSolo ? 1 : boothData.modeConfig?.participants === "duo" ? 2 : (boothData.friendCount || 2);
   const enoughPeers = isSolo ? true : peerList.length >= requiredPeers;
-  const canShoot = isEffectiveHost && enoughPeers;
+  const cameraReady = !!localStream && !!localVideoRef.current && localVideoRef.current.readyState >= 2;
+  const canShoot = isEffectiveHost && enoughPeers && cameraReady;
   const missingCount = isSolo ? 0 : Math.max(0, requiredPeers - peerList.length);
   const waitingFor = isSolo ? null : missingCount > 0
     ? (boothData.modeConfig?.participants === "duo" && boothData.participant2
@@ -1520,6 +1796,7 @@ export default function Room() {
         boothData={boothData.participant1 ? boothData : null}
         localStream={localStream}
         authError={guestAuthError}
+        isMirrored={isMirrored}
         onJoin={(name) => {
           setGuestAuthError("");
           setGuestName(name); guestNameRef.current = name; setNameConfirmed(true);
@@ -1537,29 +1814,40 @@ export default function Room() {
     <div style={{ minHeight: "100vh", background: "var(--ink)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} className="aurora-bg">
       <div className="card" style={{ textAlign: "center", maxWidth: 400, padding: 32 }}>
         <div style={{ fontSize: 42, marginBottom: 14 }}>🎞️</div>
-        <h2 className="display" style={{ fontSize: 26, color: "var(--cream)", marginBottom: 10 }}>The booth has ended</h2>
-        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 14 }}>The host ended this photo session. Thanks for making memories together!</p>
-        <button className="btn btn-primary" style={{ padding: "11px 26px", fontSize: 14, borderRadius: 10 }} onClick={() => navigate("/")}>Back to home</button>
+        <h2 className="display" style={{ fontSize: 26, color: "var(--cream)", marginBottom: 10 }}>This photobooth has ended</h2>
+        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 14 }}>The photo session has concluded. Create a new booth to start taking photos together!</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button className="btn btn-primary" style={{ padding: "11px 22px", fontSize: 14, borderRadius: 10 }} onClick={() => navigate("/create")}>Create new booth</button>
+          <button className="btn btn-ghost" style={{ padding: "11px 20px", fontSize: 13, borderRadius: 10 }} onClick={() => navigate("/")}>Back to home</button>
+        </div>
       </div>
     </div>
   );
   if (roomNotFound) return (
-    <div style={{ minHeight: "100vh", background: "var(--ink)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ textAlign: "center", maxWidth: 360 }}>
+    <div style={{ minHeight: "100vh", background: "var(--ink)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} className="aurora-bg">
+      <div className="card" style={{ textAlign: "center", maxWidth: 380, padding: 32 }}>
         <div style={{ width: 50, height: 50, borderRadius: 13, background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px" }}><AlertCircle size={22} color="var(--text-sub)" /></div>
-        <h2 className="display" style={{ fontSize: 24, color: "var(--cream)", marginBottom: 10 }}>Room not found</h2>
-        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 14 }}>This booth has expired or the code is incorrect.</p>
-        <button className="btn btn-primary" style={{ padding: "11px 26px", fontSize: 14, borderRadius: 10 }} onClick={() => navigate("/")}>Back to home</button>
+        <h2 className="display" style={{ fontSize: 24, color: "var(--cream)", marginBottom: 10 }}>Booth not found</h2>
+        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 14 }}>This photobooth code has expired or was entered incorrectly.</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button className="btn btn-primary" style={{ padding: "11px 22px", fontSize: 14, borderRadius: 10 }} onClick={() => navigate("/join")}>Enter code</button>
+          <button className="btn btn-ghost" style={{ padding: "11px 20px", fontSize: 13, borderRadius: 10 }} onClick={() => navigate("/")}>Back to home</button>
+        </div>
       </div>
     </div>
   );
-  if (camError) return (
-    <div style={{ minHeight: "100vh", background: "var(--ink)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ textAlign: "center", maxWidth: 360 }}>
-        <div style={{ width: 50, height: 50, borderRadius: 13, background: "rgba(244,63,94,0.08)", border: "1px solid rgba(244,63,94,0.2)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px" }}><AlertCircle size={22} color="#F87171" /></div>
-        <h2 className="display" style={{ fontSize: 24, color: "var(--cream)", marginBottom: 10 }}>Camera access needed</h2>
-        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 14 }}>Allow camera access in your browser settings, then refresh.</p>
-        <button className="btn btn-primary" style={{ padding: "11px 26px", fontSize: 14, borderRadius: 10 }} onClick={() => window.location.reload()}>Refresh page</button>
+  if (camErrorDetails) return (
+    <div style={{ minHeight: "100vh", background: "var(--ink)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }} className="aurora-bg">
+      <div className="card" style={{ textAlign: "center", maxWidth: 400, padding: 32 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(244,63,94,0.1)", border: "1px solid rgba(244,63,94,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", color: "#F87171" }}>
+          <AlertCircle size={24} />
+        </div>
+        <h2 className="display" style={{ fontSize: 24, color: "var(--cream)", marginBottom: 10 }}>{camErrorDetails.title}</h2>
+        <p style={{ color: "var(--text-sub)", marginBottom: 24, lineHeight: 1.65, fontSize: 13 }}>{camErrorDetails.message}</p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button className="btn btn-primary" style={{ padding: "11px 26px", fontSize: 14, borderRadius: 10 }} onClick={initCamera}>Try Again</button>
+          <button className="btn btn-ghost" style={{ padding: "11px 20px", fontSize: 13, borderRadius: 10 }} onClick={() => navigate("/")}>Back to home</button>
+        </div>
       </div>
     </div>
   );
@@ -1714,13 +2002,10 @@ export default function Room() {
       </AnimatePresence>
 
       <nav style={{ position: "sticky", top: 0, zIndex: 30, background: "rgba(9,9,16,0.92)", backdropFilter: "blur(20px)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 22px" }}>
-        <div
-          onClick={() => {
-            if (window.confirm("Leave this photobooth session and return to home?")) {
-              navigate("/");
-            }
-          }}
-          style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", userSelect: "none" }}
+        <button
+          type="button"
+          onClick={() => setShowLeaveModal(true)}
+          style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", userSelect: "none", background: "none", border: "none", padding: 0, textAlign: "left" }}
           title="Back to Home"
         >
           <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--violet)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "transform 0.15s ease" }}
@@ -1734,7 +2019,7 @@ export default function Room() {
             </div>
             <div className="hide-mobile" style={{ fontSize: 11, color: "var(--text-sub)" }}>{modeLabel}</div>
           </div>
-        </div>
+        </button>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#22C55E", boxShadow: "0 0 6px rgba(34,197,94,0.5)" }} />
@@ -1743,11 +2028,7 @@ export default function Room() {
             </span>
           </div>
           <button
-            onClick={() => {
-              if (window.confirm("Leave this photobooth session and return to home?")) {
-                navigate("/");
-              }
-            }}
+            onClick={() => setShowLeaveModal(true)}
             className="btn btn-ghost"
             style={{ padding: "6px 12px", fontSize: 12, borderRadius: 8, gap: 5 }}
             title="Leave photobooth and return to home"
@@ -1807,8 +2088,18 @@ export default function Room() {
                   <div style={{ padding: "8px 12px", background: "rgba(15,14,26,0.85)", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
                     <button
                       onClick={toggleMic}
+                      disabled={!localStream}
                       className="btn btn-ghost"
-                      style={{ padding: "6px 14px", fontSize: 12, borderRadius: 8, background: isMicMuted ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.06)", color: isMicMuted ? "#FCA5A5" : "var(--text)", border: `1px solid ${isMicMuted ? "rgba(239,68,68,0.3)" : "var(--border)"}` }}
+                      style={{
+                        padding: "6px 14px",
+                        fontSize: 12,
+                        borderRadius: 8,
+                        background: isMicMuted ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.06)",
+                        color: isMicMuted ? "#FCA5A5" : "var(--text)",
+                        border: `1px solid ${isMicMuted ? "rgba(239,68,68,0.3)" : "var(--border)"}`,
+                        opacity: localStream ? 1 : 0.5,
+                        cursor: localStream ? "pointer" : "not-allowed",
+                      }}
                     >
                       {isMicMuted ? <MicOff size={13} /> : <Mic size={13} />}
                       {isMicMuted ? "Mic Muted" : "Mic On"}
@@ -1873,7 +2164,7 @@ export default function Room() {
                 </div>
               </div>
               <div>
-                {!isSolo && <InvitePanel roomId={roomId} boothData={boothData} peerList={peerList} />}
+                {!isSolo && <InvitePanel roomId={roomId} boothData={boothData} peerList={peerList} showToast={showToast} />}
                 <div className="card" style={{ padding: 14 }}>
                   <div style={{ fontWeight: 700, fontSize: 11, marginBottom: 10, display: "flex", justifyContent: "space-between", letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--text-sub)" }}>
                     <span>Captured</span>
@@ -1902,7 +2193,7 @@ export default function Room() {
             <FilterSelector selectedFilter={filter} setSelectedFilter={setFilter} />
             <div style={{ maxWidth: 260, margin: "0 auto 16px", textAlign: "center" }}>
               <input className="field" placeholder="Add a caption (optional)" value={caption}
-                maxLength={200} onChange={e => setCaption(e.target.value)} style={{ textAlign: "center", fontSize: 13 }} />
+                maxLength={100} onChange={e => setCaption(e.target.value)} style={{ textAlign: "center", fontSize: 13 }} />
             </div>
             <StickerEditor
               stickers={stickers}
@@ -1934,7 +2225,29 @@ export default function Room() {
                     dragConstraints={photostripExportRef}
                     dragElastic={0.05}
                     dragMomentum={false}
-                    initial={{ x: s.x, y: s.y }}
+                    initial={{
+                      x: s.x || 0,
+                      y: s.y || 0,
+                      rotate: s.rotate || 0,
+                    }}
+                    animate={{
+                      x: s.x || 0,
+                      y: s.y || 0,
+                      rotate: s.rotate || 0,
+                    }}
+                    onDragEnd={(event, info) => {
+                      setStickers((prev) =>
+                        prev.map((st) =>
+                          st.id === s.id
+                            ? {
+                                ...st,
+                                x: (st.x || 0) + info.offset.x,
+                                y: (st.y || 0) + info.offset.y,
+                              }
+                            : st
+                        )
+                      );
+                    }}
                     style={{
                       position: "absolute",
                       top: 0,
@@ -1945,7 +2258,6 @@ export default function Room() {
                       touchAction: "none",
                       zIndex: selectedStickerId === s.id ? 50 : 10,
                       filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.3))",
-                      transform: s.rotate ? `rotate(${s.rotate}deg)` : undefined,
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -2001,18 +2313,83 @@ export default function Room() {
                 onClick={openMobileQrModal}>
                 <QrCode size={13} /> Mobile QR Share
               </button>
-              <button className="btn btn-ghost" style={{ padding: "12px 22px", fontSize: 13, borderRadius: 11 }}
+              <button className="btn btn-primary" style={{ padding: "12px 22px", fontSize: 13, borderRadius: 11, background: "rgba(124,58,237,0.25)", border: "1px solid var(--violet)" }}
                 onClick={() => {
-                  try {
-                    localStorage.removeItem(`framoji-session-${roomId}`);
-                    localStorage.removeItem(`framoji-pid-${roomId}`);
-                    localStorage.removeItem(`framoji-room-${roomId}`);
-                  } catch (_) { }
-                  navigate("/");
+                  navigate("/create", {
+                    state: { initialTheme: boothData.theme, initialLayout: boothData.layout }
+                  });
                 }}>
-                <RefreshCw size={12} /> New booth
+                <Sparkles size={13} /> Create Another Booth
+              </button>
+              <button className="btn btn-ghost" style={{ padding: "12px 22px", fontSize: 13, borderRadius: 11 }}
+                onClick={() => setShowLeaveModal(true)}>
+                <RefreshCw size={12} /> Leave booth
               </button>
             </div>
+
+            {/* Leave Confirmation Modal */}
+            <AnimatePresence>
+              {showLeaveModal && (
+                <div style={{ position: "fixed", inset: 0, zIndex: 150, background: "rgba(9,9,16,0.85)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                  <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="card" style={{ maxWidth: 380, width: "100%", padding: 26, textAlign: "center" }}>
+                    <div style={{ width: 44, height: 44, borderRadius: 12, background: "rgba(244,63,94,0.12)", border: "1px solid rgba(244,63,94,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px", color: "#F87171" }}>
+                      <AlertCircle size={22} />
+                    </div>
+                    <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: "var(--cream)" }}>Leave this photobooth?</h3>
+                    <p style={{ fontSize: 13, color: "var(--text-sub)", marginBottom: 22, lineHeight: 1.5 }}>
+                      Your current session will end for you. Make sure you've downloaded or saved your photostrip first!
+                    </p>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button type="button" className="btn btn-ghost" style={{ flex: 1, padding: "11px 0", fontSize: 13 }} onClick={() => setShowLeaveModal(false)}>
+                        Stay in Booth
+                      </button>
+                      <button type="button" className="btn btn-rose" style={{ flex: 1, padding: "11px 0", fontSize: 13 }} onClick={() => {
+                        setShowLeaveModal(false);
+                        try {
+                          localStorage.removeItem(`framoji-session-${roomId}`);
+                          localStorage.removeItem(`framoji-pid-${roomId}`);
+                          localStorage.removeItem(`framoji-room-${roomId}`);
+                        } catch (_) { }
+                        navigate("/");
+                      }}>
+                        Leave Session
+                      </button>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+
+            {/* Global Floating Toast */}
+            <AnimatePresence>
+              {toast && (
+                <motion.div
+                  initial={{ opacity: 0, y: -20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -16, scale: 0.95 }}
+                  style={{
+                    position: "fixed",
+                    top: 20,
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    zIndex: 200,
+                    padding: "10px 20px",
+                    borderRadius: 99,
+                    background: toast.type === "error" ? "rgba(239,68,68,0.95)" : toast.type === "warning" ? "rgba(245,158,11,0.95)" : toast.type === "success" ? "rgba(34,197,94,0.95)" : "rgba(124,58,237,0.95)",
+                    backdropFilter: "blur(14px)",
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  {toast.message}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <AnimatePresence>
               {showQrModal && (() => {
@@ -2023,7 +2400,9 @@ export default function Room() {
                 const computedUrl = qrTab === "strip"
                   ? `${origin}/strip/${stripIdRef.current}`
                   : `${origin}/room/${roomId}`;
-                const activeUrl = customQrUrl.trim() || computedUrl;
+                const activeUrl = customQrUrl.trim() && isValidHttpUrl(customQrUrl.trim())
+                  ? customQrUrl.trim()
+                  : computedUrl;
 
                 return (
                   <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(9,9,16,0.85)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -2080,8 +2459,14 @@ export default function Room() {
                       </div>
 
                       {/* QR Code Container */}
-                      <div style={{ background: "#fff", padding: 12, borderRadius: 12, display: "inline-block", marginBottom: 12 }}>
-                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(activeUrl)}`} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
+                      <div style={{ background: "#fff", padding: 12, borderRadius: 12, display: "inline-block", marginBottom: 12, minWidth: 184, minHeight: 184 }}>
+                        {qrCodeDataUrl ? (
+                          <img src={qrCodeDataUrl} alt="QR Code" style={{ width: 160, height: 160, display: "block" }} />
+                        ) : (
+                          <div style={{ width: 160, height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: "#666", fontSize: 12 }}>
+                            Generating QR…
+                          </div>
+                        )}
                       </div>
 
                       {/* Status / Link copy bar */}
@@ -2090,10 +2475,17 @@ export default function Room() {
                           type="button"
                           className="btn btn-ghost"
                           style={{ padding: "6px 14px", fontSize: 11, borderRadius: 8 }}
-                          onClick={() => {
-                            navigator.clipboard.writeText(activeUrl);
-                            setCopiedQrUrl(true);
-                            setTimeout(() => setCopiedQrUrl(false), 2000);
+                          onClick={async () => {
+                            try {
+                              if (!navigator.clipboard?.writeText) {
+                                throw new Error("Clipboard API unavailable");
+                              }
+                              await navigator.clipboard.writeText(activeUrl);
+                              setCopiedQrUrl(true);
+                              setTimeout(() => setCopiedQrUrl(false), 2000);
+                            } catch {
+                              showToast("Clipboard access was denied.", "error");
+                            }
                           }}
                         >
                           {copiedQrUrl ? <Check size={11} color="#86EFAC" /> : <Copy size={11} />}
@@ -2127,8 +2519,17 @@ export default function Room() {
                           placeholder={computedUrl}
                           value={customQrUrl}
                           onChange={e => setCustomQrUrl(e.target.value)}
-                          style={{ fontSize: 11, padding: "7px 10px" }}
+                          style={{
+                            fontSize: 11,
+                            padding: "7px 10px",
+                            borderColor: customQrUrl.trim() && !isValidHttpUrl(customQrUrl.trim()) ? "rgba(239,68,68,0.7)" : undefined,
+                          }}
                         />
+                        {customQrUrl.trim() && !isValidHttpUrl(customQrUrl.trim()) && (
+                          <div style={{ fontSize: 10, color: "#F87171", textAlign: "left", marginTop: 4 }}>
+                            ⚠️ Please enter a valid http:// or https:// URL.
+                          </div>
+                        )}
                       </div>
 
                       {isLocal && (

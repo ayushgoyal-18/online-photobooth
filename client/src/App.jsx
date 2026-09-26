@@ -1,11 +1,13 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 const Home           = lazy(() => import("./pages/Home"));
 const CreateBooth    = lazy(() => import("./pages/CreateBooth"));
 const JoinBooth      = lazy(() => import("./pages/JoinBooth"));
 const Room           = lazy(() => import("./pages/Room"));
 const PhotostripView = lazy(() => import("./pages/PhotostripView"));
+const NotFound       = lazy(() => import("./pages/NotFound"));
 
 function PageLoader() {
   return (
@@ -20,18 +22,20 @@ function PageLoader() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<PageLoader />}>
-        <Routes>
-          <Route path="/"                element={<Home />} />
-          <Route path="/create"          element={<CreateBooth />} />
-          <Route path="/join"            element={<JoinBooth />} />
-          <Route path="/room/:roomId"    element={<Room />} />
-          <Route path="/strip/:stripId"  element={<PhotostripView />} />
-          <Route path="*"                element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route path="/"                element={<Home />} />
+            <Route path="/create"          element={<CreateBooth />} />
+            <Route path="/join"            element={<JoinBooth />} />
+            <Route path="/room/:roomId"    element={<Room />} />
+            <Route path="/strip/:stripId"  element={<PhotostripView />} />
+            <Route path="*"                element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

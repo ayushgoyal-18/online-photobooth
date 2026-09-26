@@ -9,7 +9,9 @@ const socket = io(URL, {
 });
 
 socket.on("connect_error", (err) => {
-  console.error("[framoji] Socket error:", err.message);
+  if (import.meta.env.DEV) {
+    console.error("[framoji] Socket error:", err.message);
+  }
 });
 
 export default socket;

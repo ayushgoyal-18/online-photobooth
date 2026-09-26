@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronLeft, ChevronRight, Check, Users,
   UserCircle, Heart, Home as HomeIcon,
   Film, Camera, Grid, Sparkles, Wand2
 } from "lucide-react";
+import { trackEvent } from "../utils/analytics";
 
 const MODES = [
   {
@@ -113,34 +114,53 @@ function StepDot({ n, active, done }) {
 function StepBar({ step }) {
   const labels = ["Mode", "Names", "Style", "Launch"];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      {labels.map((label, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <StepDot n={i + 1} active={step === i + 1} done={step > i + 1} />
-          <span
-            className="hide-mobile"
-            style={{
-              fontSize: 12,
-              fontWeight: 700,
-              color: step === i + 1 ? "var(--text)" : "var(--text-sub)",
-            }}
-          >
-            {label}
-          </span>
-          {i < labels.length - 1 && (
-            <div
+    <div>
+      {/* Desktop & Tablet Stepper */}
+      <div className="hide-mobile" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {labels.map((label, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <StepDot n={i + 1} active={step === i + 1} done={step > i + 1} />
+            <span
               style={{
-                width: 24,
-                height: 2,
-                borderRadius: 99,
-                margin: "0 2px",
-                background: step > i + 1 ? "var(--violet)" : "var(--border)",
-                transition: "background 0.25s",
+                fontSize: 12,
+                fontWeight: 700,
+                color: step === i + 1 ? "var(--text)" : "var(--text-sub)",
               }}
-            />
-          )}
-        </div>
-      ))}
+            >
+              {label}
+            </span>
+            {i < labels.length - 1 && (
+              <div
+                style={{
+                  width: 24,
+                  height: 2,
+                  borderRadius: 99,
+                  margin: "0 2px",
+                  background: step > i + 1 ? "var(--violet)" : "var(--border)",
+                  transition: "background 0.25s",
+                }}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Narrow Screen / Mobile Step Indicator */}
+      <div className="show-mobile-only" style={{ alignItems: "center" }}>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: "var(--violet-lt)",
+            background: "rgba(124,58,237,0.12)",
+            border: "1px solid rgba(124,58,237,0.28)",
+            padding: "4px 10px",
+            borderRadius: 99,
+          }}
+        >
+          Step {step} of 4 · {labels[step - 1]}
+        </span>
+      </div>
     </div>
   );
 }
@@ -160,12 +180,13 @@ function Slide({ children }) {
 
 export default function CreateBooth() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [step, setStep] = useState(1);
-  const [mode, setMode] = useState("friends");
+  const [mode, setMode] = useState(location.state?.initialTheme || "friends");
   const [name1, setName1] = useState("");
   const [name2, setName2] = useState("");
   const [friendCount, setFriendCount] = useState(3);
-  const [layout, setLayout] = useState("classic");
+  const [layout, setLayout] = useState(location.state?.initialLayout || "classic");
   const [photoCount, setPhotoCount] = useState(4);
 
   const modeObj = MODES.find((m) => m.id === mode) || MODES[2];
@@ -173,7 +194,14 @@ export default function CreateBooth() {
   const canNext2 = name1.trim().length > 0;
 
   const handleCreate = () => {
-    const roomId = crypto.randomUUID().replace(/-/g, "").substring(0, 10);
+    const roomId =
+      window.crypto?.randomUUID?.()
+        ?.replace(/-/g, "")
+        .substring(0, 10)
+      || (
+        Math.random().toString(36).slice(2) +
+        Date.now().toString(36)
+      ).slice(0, 10);
     const config = {
       theme: mode,
       layout,
@@ -198,6 +226,13 @@ export default function CreateBooth() {
         JSON.stringify({ ...config, isHost: true })
       );
     } catch (_) { }
+
+    trackEvent("create_booth", {
+      theme: mode,
+      layout,
+      photoCount,
+      isSolo: mode === "solo",
+    });
 
     navigate(`/room/${roomId}`, { state: { ...config, isHost: true } });
   };

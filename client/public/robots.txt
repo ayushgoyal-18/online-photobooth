@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /room/
+Disallow: /strip/
+
+Sitemap: https://framoji-frontend.onrender.com/sitemap.xml

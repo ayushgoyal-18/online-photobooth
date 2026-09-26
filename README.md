@@ -2,88 +2,87 @@
 
 ### One memory. Any distance.
 
-A real-time virtual photobooth that lets people capture synchronized photos together from different locations.
+A real-time virtual photobooth web application that allows friends, couples, and groups in different locations to capture synchronized photos, customize beautiful vintage photostrips, and share memories instantly.
 
-🌐 **Live Demo:** [https://framoji-frontend.onrender.com](https://framoji-frontend.onrender.com)  
-💻 **GitHub:** [https://github.com/ayushgoyal-18/online-photobooth](https://github.com/ayushgoyal-18/online-photobooth)
-
----
-
-Framoji is a real-time virtual photobooth that lets people take synchronized photos together even when they are in different locations. Participants join a shared booth, connect their cameras through WebRTC, capture synchronized shots, review them, customize the final photostrip, and save/share the result.
+🌐 **Live Application:** [https://framoji-frontend.onrender.com](https://framoji-frontend.onrender.com)  
+💻 **GitHub Repository:** [https://github.com/ayushgoyal-18/online-photobooth](https://github.com/ayushgoyal-18/online-photobooth)
 
 ---
 
-## ✨ Features
+## ✨ Features & Capabilities
 
-- 🎥 **Real-time camera sharing with WebRTC**
-- 🔄 **Real View / Mirror View camera toggle** (Real View by default)
-- 👥 **Solo, Couple, and Friends/Group booth modes**
-- ⏱️ **Synchronized countdown and photo capture**
-- 🖼️ **Multi-participant frame aggregation**
-- 🔄 **Room/session recovery after reconnects**
-- 🎞️ **Photostrip review and retake flow**
-- 🎨 **Filters, captions, layouts, and stickers**
-- 📥 **PNG photostrip download**
-- 📋 **Copy photostrip image to clipboard**
-- 📱 **QR-based photostrip sharing** (`/strip/:stripId` → view & download saved strip)
-- 🔗 **QR-based live booth/session joining** (`/room/:roomId` → join live session)
-- ☁️ **Automatic server-side Cloudinary storage**
-- 🗄️ **MongoDB persistence for saved photostrips**
-- 🛡️ **Helmet, CORS allowlisting, rate limiting, and input validation**
-- ♿ **Accessibility support for dialogs, labels, keyboard interaction, and reduced motion**
-- 📱 **Fully responsive camera and photostrip UI**
+### 🎥 Live Virtual Photobooth
+- **Peer-to-Peer WebRTC Video:** Low-latency video and audio streaming directly between participants using WebRTC mesh topology with STUN server discovery.
+- **Real View vs. Mirror View:** Toggle between natural, unmirrored camera capture (Real View by default) and mirrored camera feed, preserved accurately in final photo exports.
+- **Multiple Booth Modes:** 
+  - 👤 **Solo:** Single-user photobooth experience with customizable layouts.
+  - 💑 **Couple / Duo:** 2-person synchronized split-frame booth.
+  - 👥 **Friends & Group:** Multi-user booth with dynamic grid aggregation.
+- **Camera Device Switching:** Seamless toggle between front and rear cameras on mobile devices, plus quick mic/video mute controls.
+
+### ⏱️ Synchronized Orchestration
+- **Host-Controlled Countdown:** 3-second synchronized visual and audio countdown across all connected peers.
+- **Multi-Frame Compositing:** Each participant captures a high-resolution local frame simultaneously, which is aggregated into a unified composite photo on the server.
+- **Review & Retake Flow:** Step-by-step review allows the host to approve or retake individual shots before generating the final strip.
+- **Session Resilience & Reconnection:** Built-in cryptographic host/guest token authentication and state recovery allow seamless reconnection after browser refresh or transient network drops.
+
+### 🎨 Photostrip Customization & Design
+- **Retro & Modern Layouts:** Classic 4-photo vertical strips, 2-photo strips, 3-photo strips, 6-photo strips, wide grid formats, and filmstrip borders with sprocket holes.
+- **Aesthetic Color Filters:** Original, Warm Vintage, Classic B&W, Sepia Grain, Film Noir, Cyber Neon, Soft Pastel, and Cool Breeze.
+- **Interactive Sticker Editor:** Drag, scale, rotate, and delete emojis and themed stickers across the photostrip.
+- **Custom Typography & Captions:** Add personalized date stamps, captions, and names.
+
+### 💾 Export, Cloud Storage & Sharing
+- **Revision-Aware Autosave Loop:** Non-blocking, dirty-state aware background saving that uploads the latest revision to Cloudinary and MongoDB without race conditions.
+- **Cross-Origin Safe Download:** High-res PNG export with resilient cross-origin Blob handling.
+- **Clipboard Image Copy:** One-click copy of the final photostrip PNG directly to the system clipboard.
+- **Dual Dynamic QR Codes:**
+  - 🔗 **Booth Join QR (`/room/:roomId`):** Lets guests scan with mobile phones to instantly join the live booth session.
+  - 📱 **Saved Photostrip QR (`/strip/:stripId`):** Generates a mobile-ready link to view, download, and share the cloud-stored strip.
+- **Dedicated Public View (`/strip/:stripId`):** Standalone, responsive photostrip viewer with native Web Share API support.
+- **Local Gallery Drawer:** Fast client-side session history saved to browser `localStorage`.
+
+### 🛡️ Security & Privacy
+- **Hardened HTTP:** Helmet security headers, `X-Powered-By` disabled, strict CORS allowlisting with local network dev support, and JSON body limits.
+- **Granular Rate Limiting:** Endpoint-specific limits for general API requests, photostrip generation, and analytics submissions.
+- **Cryptographic Edit Tokens:** Photostrip updates require matching SHA-256 hashed edit tokens to prevent unauthorized modifications.
+- **Protected Admin Analytics:** Privacy-friendly, cookie-less event tracking with 90-day TTL expiry and admin-key protected metrics endpoint (`/api/analytics/stats`).
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Data Flow
 
 ```
-                         ┌─────────────────────┐
-                         │      Browser        │
-                         │   React + Vite      │
-                         └──────────┬──────────┘
-                                    │
-                     HTTPS / WSS    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │   Render Web Site   │
-                         │   React Static Site │
-                         └──────────┬──────────┘
-                                    │
-                           REST / Socket.IO
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │  Render Web Service │
-                         │ Express + Socket.IO │
-                         └──────┬──────┬───────┘
-                                │      │
-                    ┌───────────┘      └────────────┐
-                    ▼                              ▼
-             ┌─────────────┐                ┌─────────────┐
-             │   MongoDB   │                │ Cloudinary  │
-             │ photostrips │                │ image store │
-             └─────────────┘                └─────────────┘
+                                  ┌────────────────────────┐
+                                  │   Client SPA (React)   │
+                                  │ Vite · Router · WebRTC │
+                                  └───────────┬────────────┘
+                                              │
+                              ┌───────────────┴───────────────┐
+                  WebRTC (P2P)│                               │ Socket.IO + REST
+                              ▼                               ▼
+                 ┌─────────────────────────┐     ┌─────────────────────────┐
+                 │   Peer WebRTC Client    │     │  Express + Socket.IO    │
+                 │  Direct Media Streaming │     │    Node.js Server       │
+                 └─────────────────────────┘     └────────────┬────────────┘
+                                                              │
+                                            ┌─────────────────┴─────────────────┐
+                                            ▼                                   ▼
+                                 ┌────────────────────┐              ┌────────────────────┐
+                                 │   MongoDB Atlas    │              │  Cloudinary CDN    │
+                                 │ Metadata & Events  │              │ Photostrip Images  │
+                                 └────────────────────┘              └────────────────────┘
 ```
 
-**Browser ↔ Browser media:** WebRTC peer-to-peer video/audio
+### End-to-End Workflow
 
-### Main Flow
-
-1. **Host creates a booth** and chooses Solo, Couple, or Friends mode.
-2. **Server creates and stores** the room configuration.
-3. **Guests open the room link or scan the Booth QR** (`/room/:roomId`) and enter their names.
-4. **Browser camera permissions** are requested (defaulting to unmirrored Real View).
-5. **WebRTC establishes peer-to-peer** camera connections.
-6. **Host starts the synchronized countdown**.
-7. **Each participant captures a local frame** matching their selected view orientation.
-8. **Frames are submitted to the server** and aggregated into a unified frame.
-9. **All participants receive the merged preview**.
-10. **Host accepts or retakes each shot**.
-11. **After all shots are accepted**, the host generates the photostrip.
-12. **The completed photostrip is automatically uploaded** through the backend to Cloudinary.
-13. **Photostrip metadata is persisted in MongoDB Atlas**.
-14. **Users can download the photostrip, copy it, or scan the Saved Photostrip QR** (`/strip/:stripId`) to view and download on mobile.
+1. **Booth Creation:** Host selects mode, participant names, theme, and layout on [CreateBooth.jsx](file:///c:/Users/Ayush%20Goyal/Desktop/online-photobooth/client/src/pages/CreateBooth.jsx).
+2. **Signaling & Connection:** Guests join via link or QR code ([JoinBooth.jsx](file:///c:/Users/Ayush%20Goyal/Desktop/online-photobooth/client/src/pages/JoinBooth.jsx)). WebRTC peer connections are negotiated via Socket.IO signaling.
+3. **Synchronized Capture:** Host triggers the countdown. All clients simultaneously capture high-resolution frames with selected mirror/real orientation.
+4. **Frame Review:** Server merges individual participant frames into a composite shot. The host reviews and either accepts or retakes each shot.
+5. **Customization & Auto-Sync:** Participants edit filters, captions, and stickers. The client-side revision loop renders the photostrip via `html2canvas` and syncs to `/api/photostrips`.
+6. **Cloud Persistence:** Backend uploads the rendered image to Cloudinary and persists metadata in MongoDB Atlas.
+7. **Instant Sharing:** Participants download high-res PNGs, copy images to clipboard, or scan the `/strip/:stripId` QR code for instant mobile viewing.
 
 ---
 
@@ -92,40 +91,52 @@ Framoji is a real-time virtual photobooth that lets people take synchronized pho
 ```
 online-photobooth/
 │
-├── client/
+├── client/                                  # React SPA Frontend (Vite)
 │   ├── public/
-│   │   ├── _redirects
-│   │   └── og-image.png
+│   │   ├── _redirects                       # Render SPA rewrite rule (/* /index.html 200)
+│   │   ├── apple-touch-icon.png             # Apple iOS home screen touch icon
+│   │   ├── og-image.png                     # OpenGraph preview banner image
+│   │   ├── robots.txt                       # Search engine crawler instructions
+│   │   └── sitemap.xml                      # XML Sitemap for SEO indexing
+│   │
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── Countdown.jsx
-│   │   │   ├── FilterSelector.jsx
-│   │   │   ├── PhotoPreview.jsx
-│   │   │   ├── PhotoReview.jsx
-│   │   │   ├── Photostrip.jsx
-│   │   │   └── StickerEditor.jsx
+│   │   │   ├── Countdown.jsx                # Visual & audio countdown overlay
+│   │   │   ├── ErrorBoundary.jsx            # React Error Boundary crash protector
+│   │   │   ├── FilterSelector.jsx           # Real-time CSS canvas filter picker
+│   │   │   ├── LegalModal.jsx               # Terms, Privacy & Cookies dialog modal
+│   │   │   ├── PhotoPreview.jsx             # Live multi-peer composite review
+│   │   │   ├── PhotoReview.jsx              # Host accept / retake review step
+│   │   │   ├── Photostrip.jsx               # Photostrip DOM canvas & frame renderer
+│   │   │   └── StickerEditor.jsx            # Draggable, scalable emoji sticker editor
 │   │   │
 │   │   ├── pages/
-│   │   │   ├── Home.jsx
-│   │   │   ├── CreateBooth.jsx
-│   │   │   ├── JoinBooth.jsx
-│   │   │   ├── Room.jsx
-│   │   │   └── PhotostripView.jsx
+│   │   │   ├── Home.jsx                     # Landing page with interactive preview & gallery
+│   │   │   ├── CreateBooth.jsx              # Multi-step booth wizard
+│   │   │   ├── JoinBooth.jsx                # Room code entry screen
+│   │   │   ├── Room.jsx                     # Core WebRTC room & photobooth engine
+│   │   │   ├── PhotostripView.jsx           # Standalone public photostrip viewer (/strip/:id)
+│   │   │   └── NotFound.jsx                 # 404 error page with quick navigation
 │   │   │
-│   │   ├── App.jsx
-│   │   ├── socket.jsx
-│   │   ├── main.jsx
-│   │   └── index.css
+│   │   ├── utils/
+│   │   │   ├── analytics.js                 # Privacy-first client event tracker
+│   │   │   └── download.js                  # Cross-origin image download utility
+│   │   │
+│   │   ├── App.jsx                          # Main routing & layout component
+│   │   ├── index.css                        # Design system tokens & base typography
+│   │   ├── main.jsx                         # React entry point
+│   │   └── socket.jsx                       # Socket.IO client singleton
 │   │
-│   ├── index.html
+│   ├── index.html                           # HTML template with metadata & fonts
 │   ├── package.json
-│   ├── .env.example
-│   └── vite.config.js
+│   ├── vite.config.js
+│   └── .env.example
 │
-├── server/
+├── server/                                  # Express & Socket.IO Backend
 │   ├── config/
-│   │   └── cloudinary.js
-│   ├── server.js
+│   │   └── cloudinary.js                    # Cloudinary SDK client configuration
+│   │
+│   ├── server.js                            # Express API, MongoDB models & Socket server
 │   ├── package.json
 │   └── .env.example
 │
@@ -137,181 +148,159 @@ online-photobooth/
 ## 🧰 Tech Stack
 
 ### Frontend
-- **React 19**
-- **Vite**
-- **React Router**
-- **Socket.IO Client**
-- **WebRTC API**
-- **Framer Motion**
-- **Lucide React**
-- **Tailwind CSS**
-- **html2canvas**
-- **canvas-confetti**
+- **Framework:** React 19, Vite
+- **Routing:** React Router v7
+- **Real-Time Communication:** Socket.IO Client, WebRTC API
+- **Animations & Icons:** Framer Motion, Lucide React, Canvas Confetti
+- **Image Generation & QR:** `html2canvas`, `qrcode`
+- **Styling:** Vanilla CSS design tokens with Aurora gradients & glassmorphism
 
 ### Backend
-- **Node.js**
-- **Express**
-- **Socket.IO**
-- **MongoDB / Mongoose**
-- **Cloudinary SDK**
-- **Helmet**
-- **express-rate-limit**
-- **CORS**
+- **Runtime:** Node.js, Express
+- **WebSockets:** Socket.IO
+- **Database:** MongoDB Atlas with Mongoose ODM
+- **Media Storage:** Cloudinary SDK & CDN
+- **Security & Utilities:** Helmet, CORS, `express-rate-limit`, Crypto
 
-### Infrastructure
-- **Render Static Sites** (Frontend SPA)
-- **Render Web Services** (Backend Node API + Socket.IO)
-- **MongoDB Atlas** (Database)
-- **Cloudinary** (Media storage & CDN)
+### Infrastructure & Deployment
+- **Frontend Hosting:** Render Static Sites
+- **Backend Hosting:** Render Web Services
+- **Database:** MongoDB Atlas (M0 / Serverless)
+- **CDN & Storage:** Cloudinary Media Cloud
 
 ---
 
-## 🚀 Local Development
+## 🔌 API & Socket Reference
 
-### 1. Clone the repository
+### REST Endpoints
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/health` | Public | Server & MongoDB connection health check |
+| `POST` | `/api/photostrips` | Rate-limited | Uploads rendered photostrip image to Cloudinary & saves metadata to MongoDB |
+| `GET` | `/api/photostrips/:stripId` | Public | Retrieves photostrip metadata and Cloudinary URL |
+| `GET` | `/api/ice-servers` | Public | Returns STUN servers for WebRTC peer connection |
+| `GET` | `/api/network-info` | Dev Only | Returns local network IP for testing mobile devices on local WiFi |
+| `POST` | `/api/analytics/event` | Rate-limited | Records privacy-friendly client event (90-day TTL) |
+| `GET` | `/api/analytics/stats` | Admin Header | Aggregated analytics metrics (requires `X-Admin-Key` header) |
+
+### Key Socket.IO Events
+
+| Event | Direction | Payload / Purpose |
+|---|---|---|
+| `create-room` | Client → Server | Initializes a new room session with theme, mode, and participant configuration |
+| `join-room` | Client → Server | Validates room capacity, registers participant, and assigns host/guest tokens |
+| `peers-updated` | Server → Client | Broadcasts sanitized list of connected participants (`id`, `name`, `isHost`) |
+| `signal-offer` / `signal-answer` | Bidirectional | Relays WebRTC SDP descriptions between peers |
+| `signal-ice` | Bidirectional | Relays WebRTC ICE candidates with client-side queue buffering |
+| `start-countdown` | Host → Server | Broadcasts synchronized 3-second countdown to all room members |
+| `submit-photo` | Client → Server | Submits individual participant camera frame for server aggregation |
+| `photo-captured` | Server → Client | Broadcasts aggregated composite preview to all room members |
+| `accept-photo` / `retake-photo` | Host → Server | Advances photobooth sequence or retakes the current shot |
+| `all-photos-complete` | Server → Client | Signals transition from capture phase to photostrip customizer |
+
+---
+
+## 🚀 Getting Started Locally
+
+### 1. Prerequisites
+- **Node.js** (v18.0.0 or higher)
+- **npm** (v9.0.0 or higher)
+- **MongoDB Atlas** account (or local MongoDB instance)
+- **Cloudinary** account
+
+### 2. Clone the Repository
 ```bash
 git clone https://github.com/ayushgoyal-18/online-photobooth.git
 cd online-photobooth
 ```
 
-### 2. Install dependencies
+### 3. Backend Setup
 ```bash
-# Frontend
+cd server
+npm install
+```
+
+Create a `.env` file in the `server/` directory:
+```env
+PORT=5000
+NODE_ENV=development
+
+# MongoDB Connection
+MONGODB_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/framoji?retryWrites=true&w=majority
+
+# Cloudinary Storage
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# Allowed CORS Origins (comma-separated)
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+
+# Analytics Protection (optional for dev)
+ANALYTICS_ADMIN_KEY=your_secure_admin_key
+```
+
+Start the backend server:
+```bash
+npm start
+```
+*Verify backend health: `http://localhost:5000/health`*
+
+### 4. Frontend Setup
+In a new terminal window:
+```bash
 cd client
 npm install
-
-# Backend
-cd ../server
-npm install
 ```
 
-### 3. Configure backend environment variables
-Create `server/.env`:
-```env
-NODE_ENV=development
-PORT=5000
-
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>/<database>
-
-CLOUDINARY_CLOUD_NAME=<cloud_name>
-CLOUDINARY_API_KEY=<api_key>
-CLOUDINARY_API_SECRET=<api_secret>
-
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
-```
-
-### 4. Configure frontend environment variables
-Create `client/.env`:
+Create a `.env` file in the `client/` directory:
 ```env
 VITE_SERVER_URL=http://localhost:5000
 ```
-*(Do not put server secrets in `client/.env`. Anything prefixed with `VITE_` is exposed to the browser.)*
 
-### 5. Start the backend
+Start the Vite development server:
 ```bash
-cd server
-npm start
-```
-*Check health endpoint: `http://localhost:5000/health`*
-
-### 6. Start the frontend
-In a second terminal:
-```bash
-cd client
 npm run dev
 ```
-*Open in browser: `http://localhost:5173`*
+*Open in your browser: `http://localhost:5173`*
 
 ---
 
 ## 🌐 Production Deployment on Render
 
-Framoji is configured for seamless deployment on Render across two services:
+Framoji is configured for continuous zero-config deployment on Render.
 
-### Backend — Render Web Service
+### 1. Backend Web Service
+- **Environment:** `Node`
 - **Root Directory:** `server`
-- **Runtime:** `Node`
 - **Build Command:** `npm ci`
 - **Start Command:** `npm start`
 - **Health Check Path:** `/health`
+- **Environment Variables:**
+  ```env
+  NODE_ENV=production
+  MONGODB_URI=mongodb+srv://...
+  CLOUDINARY_CLOUD_NAME=...
+  CLOUDINARY_API_KEY=...
+  CLOUDINARY_API_SECRET=...
+  ALLOWED_ORIGINS=https://framoji-frontend.onrender.com
+  ANALYTICS_ADMIN_KEY=your_production_admin_key
+  ```
 
-**Environment Variables:**
-```env
-NODE_ENV=production
-MONGODB_URI=mongodb+srv://...
-CLOUDINARY_CLOUD_NAME=...
-CLOUDINARY_API_KEY=...
-CLOUDINARY_API_SECRET=...
-ALLOWED_ORIGINS=https://framoji-frontend.onrender.com
-```
-
-### Frontend — Render Static Site
+### 2. Frontend Static Site
+- **Environment:** `Static Site`
 - **Root Directory:** `client`
 - **Build Command:** `npm ci && npm run build`
 - **Publish Directory:** `dist`
-
-**Environment Variables:**
-```env
-VITE_SERVER_URL=https://framoji-backend.onrender.com
-```
-
-**SPA Routing Rewrite (`client/public/_redirects`):**
-```
-/* /index.html 200
-```
-This ensures direct navigation and QR scanning for `/room/:roomId` and `/strip/:stripId` route smoothly through React Router.
-
----
-
-## 🔐 Security
-
-Framoji incorporates defensive best practices across the full stack:
-- **HTTP Hardening:** Helmet security headers, `x-powered-by` disabled, strict CORS allowlisting, body size limits.
-- **Rate Limiting:** `express-rate-limit` safeguards API endpoints and photostrip creation against abuse.
-- **Socket Isolation:** Validates room IDs, participant membership, host privileges, and frame payloads.
-- **Reconnection Tokens:** Server-issued `hostToken` and `guestToken` authenticate reconnecting peers.
-- **Secret Isolation:** Cloudinary API secrets and database connection strings remain strictly server-side.
-
----
-
-## ⚠️ WebRTC & Production Notes
-
-- **WebRTC Peer Discovery:** Framoji uses public STUN servers for WebRTC peer discovery without requiring a TURN relay for the MVP. Restrictive corporate firewalls or symmetric NATs may occasionally prevent P2P media connections.
-- **In-Memory Room State:** Active room state resides in server memory for low latency. For high-availability multi-instance scaling, room sessions can be moved to Redis.
-- **Render Cold Starts:** Free-tier instances may experience initial spin-up latency on first visit.
-
----
-
-## 🧪 Verification Checklist
-
-- [x] **Camera Orientation:** Default camera opens in Real View; toggle switches cleanly to Mirror View; captured photos preserve the exact orientation selected.
-- [x] **Booth Session QR:** Generates `/room/:roomId` link; scans directly into the active session without 404.
-- [x] **Saved Photostrip QR:** Generates `/strip/:stripId` link; scans directly to the dedicated Photostrip view.
-- [x] **Cloud Persistence:** Strip metadata saves to MongoDB Atlas; image uploads to Cloudinary.
-- [x] **Multi-Participant Sync:** Countdowns, camera feeds, and frame aggregation synchronize across peers.
-- [x] **Customization:** Filters, captions, layouts, and draggable stickers render accurately.
-- [x] **Download & Clipboard:** Direct PNG download and clipboard copy functions work across devices.
-
----
-
-## 🛠️ Future Improvements
-
-- ⚡ Redis-backed distributed room state
-- 🧪 Automated E2E test suite (Playwright)
-- 📐 TypeScript migration & Zod schema validation
-- 📊 Error tracking integration (Sentry)
-- 📱 Progressive Web App (PWA) installation
+- **Environment Variables:**
+  ```env
+  VITE_SERVER_URL=https://framoji-backend.onrender.com
+  ```
+- **SPA Redirect Support:** The `client/public/_redirects` file automatically redirects all subpaths (`/* /index.html 200`) so direct QR navigation to `/room/:id` and `/strip/:id` works seamlessly.
 
 ---
 
 ## 📜 License
 
-This project is currently provided for educational and portfolio purposes.
-
----
-
-## 👨‍💻 Project Status
-
-Framoji is a deployed full-stack real-time photobooth MVP.
-
-The application is deployed using Render, with MongoDB Atlas for persistent photostrip metadata and Cloudinary for image storage.
+This project is open source and available under the [MIT License](LICENSE).

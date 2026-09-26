@@ -14,6 +14,7 @@ const cloudinary = require("./config/cloudinary");
 const app = express();
 const server = http.createServer(app);
 
+app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 app.use(helmet({
@@ -33,13 +34,12 @@ const envOrigins = process.env.ALLOWED_ORIGINS
   : [];
 
 const allowedOrigins = process.env.NODE_ENV === "production"
-  ? (envOrigins.length > 0 ? envOrigins : ["https://framoji-frontend.onrender.com", "https://framoji.com"])
+  ? (envOrigins.length > 0 ? envOrigins : ["https://framoji-frontend.onrender.com"])
   : [...devOrigins, ...envOrigins];
 
 function isOriginAllowed(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) return true;
-  if (origin === "https://framoji-frontend.onrender.com" || origin.endsWith(".onrender.com")) return true;
   // In development, allow any local network / private IP or localhost with any port
   if (process.env.NODE_ENV !== "production") {
     if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)) {
@@ -61,6 +61,13 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "5mb" }));
+
+// Request ID tracing middleware
+app.use((req, res, next) => {
+  req.id = crypto.randomUUID().slice(0, 8);
+  res.setHeader("X-Request-Id", req.id);
+  next();
+});
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -95,15 +102,26 @@ app.get("/health", (req, res) => {
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/framoji";
 let isMongoConnected = false;
 
+mongoose.connection.on("connected", () => {
+  isMongoConnected = true;
+  console.log(`[db] MongoDB connection established → ${mongoose.connection.name}`);
+});
+
+mongoose.connection.on("disconnected", () => {
+  isMongoConnected = false;
+  console.warn("[db] MongoDB disconnected");
+});
+
+mongoose.connection.on("error", (err) => {
+  console.error("[db] MongoDB connection error:", err.message);
+});
+
 mongoose.connect(MONGODB_URI, {
   dbName: "framoji",
   serverSelectionTimeoutMS: 5000,
 })
   .then(() => {
     isMongoConnected = true;
-    console.log(
-      `[db] MongoDB connected successfully → ${mongoose.connection.name}`
-    );
   })
   .catch((err) => {
     console.error("[db] MongoDB connection failed:", err.message);
@@ -131,9 +149,25 @@ function isValidPhotoIndex(value, room) {
   return Number.isInteger(value) && value >= 0 && value < max;
 }
 
+function hashEditToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function safeTokenMatch(provided, stored) {
+  if (!provided || !stored) return false;
+  try {
+    const a = Buffer.from(hashEditToken(provided), "hex");
+    const b = Buffer.from(stored, "hex");
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
 const PhotostripSchema = new mongoose.Schema({
   stripId: { type: String, required: true, unique: true },
   cloudinaryUrl: { type: String, required: true },
+  editTokenHash: { type: String, select: false },
   theme: { type: String },
   layout: { type: String },
   names: { type: String },
@@ -143,6 +177,15 @@ const PhotostripSchema = new mongoose.Schema({
 });
 
 const PhotostripModel = mongoose.model("Photostrip", PhotostripSchema);
+
+const AnalyticsEventSchema = new mongoose.Schema({
+  event: { type: String, required: true, index: true },
+  sessionId: { type: String, index: true },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  createdAt: { type: Date, default: Date.now, expires: 7776000 }, // 90 days in seconds
+});
+
+const AnalyticsEventModel = mongoose.model("AnalyticsEvent", AnalyticsEventSchema);
 
 /* ── Express REST API Endpoints ── */
 
@@ -160,8 +203,28 @@ app.post("/api/photostrips", stripLimiter, async (req, res) => {
       return res.status(400).json({ error: "Invalid roomId format" });
     }
 
+    if (!isMongoConnected) {
+      return res.status(503).json({
+        error: "Database unavailable. Photostrip was not saved."
+      });
+    }
+
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
       return res.status(503).json({ error: "Cloudinary image storage is not configured" });
+    }
+
+    const providedEditToken = req.get("x-strip-edit-token");
+    const existing = await PhotostripModel.findOne({ stripId: cleanStripId }).select("+editTokenHash");
+
+    let editToken = null;
+    if (existing) {
+      if (!existing.editTokenHash || !safeTokenMatch(providedEditToken, existing.editTokenHash)) {
+        return res.status(403).json({
+          error: "Photostrip edit authorization required",
+        });
+      }
+    } else {
+      editToken = crypto.randomBytes(32).toString("hex");
     }
 
     let uploadRes;
@@ -169,10 +232,12 @@ app.post("/api/photostrips", stripLimiter, async (req, res) => {
       uploadRes = await cloudinary.uploader.upload(dataUrl, {
         folder: "framoji",
         public_id: cleanStripId,
-        overwrite: false,
+        overwrite: true,
+        invalidate: true,
       });
+      console.log(`[req:${req.id}] Cloudinary upload successful → ${cleanStripId}`);
     } catch (cErr) {
-      console.error("[cloudinary] upload failed:", cErr.message);
+      console.error(`[req:${req.id}] Cloudinary upload failed:`, cErr.message);
       return res.status(503).json({ error: "Unable to save photostrip to cloud storage" });
     }
 
@@ -184,13 +249,11 @@ app.post("/api/photostrips", stripLimiter, async (req, res) => {
       names: String(names || "").slice(0, 100),
       caption: String(caption || "").slice(0, 200),
       roomId: String(roomId || "").slice(0, 50),
-      createdAt: new Date(),
+      createdAt: existing?.createdAt || new Date(),
     };
 
-    if (!isMongoConnected) {
-      return res.status(503).json({
-        error: "Database unavailable. Photostrip was not saved."
-      });
+    if (editToken) {
+      payload.editTokenHash = hashEditToken(editToken);
     }
 
     const doc = await PhotostripModel.findOneAndUpdate(
@@ -200,10 +263,16 @@ app.post("/api/photostrips", stripLimiter, async (req, res) => {
     );
 
     console.log(
-      `[db] Photostrip saved → ${doc.stripId} in ${mongoose.connection.name}.photostrips`
+      `[req:${req.id}] Photostrip saved in DB → ${doc.stripId}`
     );
 
-    return res.status(201).json(doc);
+    const response = doc.toObject();
+    delete response.editTokenHash;
+    if (editToken) {
+      response.editToken = editToken;
+    }
+
+    return res.status(existing ? 200 : 201).json(response);
   } catch (err) {
     console.error("[api] post photostrip error:", err);
     return res.status(500).json({ error: "Failed to save photostrip" });
@@ -271,6 +340,122 @@ app.get("/api/network-info", (req, res) => {
     clientPort: 5173,
     clientLanUrl: `http://${localIp}:5173`,
   });
+});
+
+/* ── Privacy-Friendly Analytics Endpoints ── */
+
+const analyticsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const ALLOWED_ANALYTICS_EVENTS = new Set([
+  "landing_page_view",
+  "create_booth",
+  "join_booth",
+  "camera_permission_granted",
+  "camera_permission_denied",
+  "camera_not_found",
+  "camera_in_use",
+  "booth_started",
+  "participant_joined",
+  "photo_captured",
+  "photostrip_generated",
+  "download_clicked",
+  "download_failed",
+  "qr_opened",
+  "share_clicked",
+  "join_failed",
+  "room_not_found",
+  "peer_connection_failed",
+  "photostrip_save_failed",
+]);
+
+function isValidAnalyticsSessionId(value) {
+  return (
+    typeof value === "string" &&
+    /^[a-zA-Z0-9_-]{8,64}$/.test(value)
+  );
+}
+
+function sanitizeMetadata(input, depth = 0) {
+  if (depth > 2 || !input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const clean = {};
+  let keyCount = 0;
+  for (const [k, v] of Object.entries(input)) {
+    if (++keyCount > 15) break;
+    const cleanKey = String(k).slice(0, 30);
+    if (typeof v === "string") {
+      if (v.length <= 60 && !v.startsWith("data:") && !v.includes("token") && !v.includes("password")) {
+        clean[cleanKey] = v;
+      }
+    } else if (typeof v === "number" || typeof v === "boolean") {
+      clean[cleanKey] = v;
+    } else if (typeof v === "object" && v !== null) {
+      const nested = sanitizeMetadata(v, depth + 1);
+      if (nested && Object.keys(nested).length > 0) {
+        clean[cleanKey] = nested;
+      }
+    }
+  }
+  return clean;
+}
+
+app.post(
+  "/api/analytics/event",
+  express.json({ limit: "10kb" }),
+  analyticsLimiter,
+  async (req, res) => {
+    try {
+      const { event, sessionId, metadata } = req.body || {};
+      if (!event || typeof event !== "string" || !ALLOWED_ANALYTICS_EVENTS.has(event)) {
+        return res.status(400).json({ error: "Invalid or unsupported event" });
+      }
+
+      const cleanMeta = sanitizeMetadata(metadata) || {};
+
+      if (isMongoConnected) {
+        await AnalyticsEventModel.create({
+          event,
+          sessionId: isValidAnalyticsSessionId(sessionId) ? sessionId : undefined,
+          metadata: cleanMeta,
+        });
+      }
+
+      return res.status(204).end();
+    } catch (err) {
+      console.warn("[analytics] error logging event:", err.message);
+      return res.status(500).json({ error: "Failed to record event" });
+    }
+  }
+);
+
+const analyticsStatsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.get("/api/analytics/stats", analyticsStatsLimiter, async (req, res) => {
+  try {
+    const adminKey = process.env.ANALYTICS_ADMIN_KEY;
+    if (!adminKey || req.headers["x-admin-key"] !== adminKey) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!isMongoConnected) return res.json({ counts: {} });
+    const stats = await AnalyticsEventModel.aggregate([
+      { $group: { _id: "$event", count: { $sum: 1 } } }
+    ]);
+    const counts = {};
+    stats.forEach(s => { counts[s._id] = s.count; });
+    return res.json({ counts });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 const io = new Server(server, {
@@ -503,9 +688,21 @@ io.on("connection", (socket) => {
     if (!isRoomParticipant(room, socket) || !payload?.to || !room.peers[payload.to]) return;
     io.to(payload.to).emit(event, { ...payload, from: socket.id });
   };
-  socket.on("webrtc-offer", (payload) => relayToRoomPeer("webrtc-offer", payload));
-  socket.on("webrtc-answer", (payload) => relayToRoomPeer("webrtc-answer", payload));
-  socket.on("webrtc-ice", (payload) => relayToRoomPeer("webrtc-ice", payload));
+  socket.on("webrtc-offer", (payload) => {
+    if (!checkRateLimit("offer", 250)) return;
+    if (!payload || typeof payload !== "object" || !payload.offer || typeof payload.offer !== "object") return;
+    relayToRoomPeer("webrtc-offer", payload);
+  });
+  socket.on("webrtc-answer", (payload) => {
+    if (!checkRateLimit("answer", 250)) return;
+    if (!payload || typeof payload !== "object" || !payload.answer || typeof payload.answer !== "object") return;
+    relayToRoomPeer("webrtc-answer", payload);
+  });
+  socket.on("webrtc-ice", (payload) => {
+    if (!checkRateLimit("ice", 50)) return;
+    if (!payload || typeof payload !== "object" || !payload.candidate || typeof payload.candidate !== "object") return;
+    relayToRoomPeer("webrtc-ice", payload);
+  });
 
   socket.on("start-countdown", (roomId) => {
     if (!checkRateLimit("countdown", 1500)) return;
@@ -643,7 +840,26 @@ io.on("connection", (socket) => {
     Object.keys(room.photos).forEach(idx => {
       if (room.photos[idx]) {
         delete room.photos[idx][socket.id];
-        if (Object.keys(room.photos[idx]).length === 0) delete room.photos[idx];
+        if (Object.keys(room.photos[idx]).length === 0) {
+          delete room.photos[idx];
+        } else {
+          const photoIndex = Number(idx);
+          const current = room.photos[photoIndex];
+          const activeIds = Object.keys(room.peers);
+          if (activeIds.length > 0 && activeIds.every(id => current[id])) {
+            if (room[`frameTimer_${photoIndex}`]) {
+              clearTimeout(room[`frameTimer_${photoIndex}`]);
+              delete room[`frameTimer_${photoIndex}`];
+            }
+            const orderedIds = (room.peerOrder || []).filter(id => room.peers[id] && current[id]);
+            io.to(roomId).emit("frames-ready", {
+              photoIndex,
+              frames: { ...current },
+              peerOrder: orderedIds,
+            });
+            delete room.photos[photoIndex];
+          }
+        }
       }
     });
     room.peerOrder = room.peerOrder.filter(id => id !== socket.id);

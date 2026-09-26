@@ -35,8 +35,8 @@ export default function Photostrip({
   caption = "",
 }) {
   const t = THEMES[theme] || THEMES.friends;
-  const flt = FILTER_CSS[selectedFilter] || "none";
-  const displayName = allNames || (participant2 ? `${participant1} × ${participant2}` : participant1);
+  const rawDisplayName = allNames || (participant2 ? `${participant1} × ${participant2}` : participant1);
+  const displayName = typeof rawDisplayName === "string" ? rawDisplayName.slice(0, 100) : "";
   const dateLine = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   const isMulti = theme === "couple" || theme === "friends" || Boolean(participant2) || Boolean(allNames);
 
@@ -113,7 +113,7 @@ export default function Photostrip({
               fontWeight: 700,
             }}
           >
-            framoji.app
+            MADE WITH FRAMOJI
           </div>
         </div>
       </div>
@@ -198,7 +198,7 @@ export default function Photostrip({
                 fontWeight: 700,
               }}
             >
-              framoji.app
+              MADE WITH FRAMOJI
             </div>
           </div>
         </div>
@@ -320,7 +320,7 @@ export default function Photostrip({
               <span style={{ fontSize: 6, color: "#A07820", fontWeight: 700 }}>
                 {displayName}
               </span>
-              <span style={{ fontSize: 6, color: "#7A5C1A" }}>FRAMOJI.APP</span>
+              <span style={{ fontSize: 6, color: "#7A5C1A", fontWeight: 700 }}>FRAMOJI</span>
             </div>
             {caption && (
               <div

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowRight, Hash } from "lucide-react";
+import { trackEvent } from "../utils/analytics";
 
 export default function JoinBooth() {
   const navigate = useNavigate();
@@ -10,16 +11,33 @@ export default function JoinBooth() {
   const [error, setError] = useState("");
 
   const join = () => {
-    if (!name.trim()) { setError("Enter your name so the host can see who joined."); return; }
-    const trimmed = input.trim();
-    if (!trimmed) { setError("Paste a room link or enter the room code."); return; }
-    let code = trimmed;
-    const match = trimmed.match(/\/room\/([a-zA-Z0-9_-]{6,30})(?:\/)?$/i);
-    if (match) code = match[1];
-    if (!/^[a-zA-Z0-9_-]{6,30}$/.test(code)) {
-      setError("Enter a valid room code (6–30 characters).");
+    if (!name.trim()) {
+      setError("Enter your name so the host can see who joined.");
+      trackEvent("join_failed", { reason: "missing_name" });
       return;
     }
+    const trimmed = input.trim();
+    if (!trimmed) {
+      setError("Paste a room link or enter the room code.");
+      trackEvent("join_failed", { reason: "missing_room" });
+      return;
+    }
+    let code = null;
+    try {
+      const url = new URL(trimmed.startsWith("http") ? trimmed : `http://dummy.com/${trimmed.replace(/^\/+/, "")}`);
+      const match = url.pathname.match(/^\/room\/([a-zA-Z0-9_-]{6,30})\/?$/i);
+      if (match) code = match[1];
+    } catch (_) {}
+    if (!code && /^[a-zA-Z0-9_-]{6,30}$/.test(trimmed)) {
+      code = trimmed;
+    }
+
+    if (!code) {
+      setError("Enter a valid Framoji room link or room code.");
+      trackEvent("join_failed", { reason: "invalid_room_code" });
+      return;
+    }
+    trackEvent("join_booth", { source: "join_page" });
     navigate(`/room/${code}`, { state: { guestName: name.trim() } });
   };
 
@@ -45,7 +63,7 @@ export default function JoinBooth() {
             <label htmlFor="join-room" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--text-sub)", marginBottom: 6, letterSpacing: "0.05em", textTransform: "uppercase" }}>
               <Hash size={11} color="var(--violet-lt)" /> Room link or code
             </label>
-            <input id="join-room" name="room" className="field" placeholder="https://framoji.app/room/abc123  or  abc123" value={input} onChange={e => { setInput(e.target.value); setError(""); }} onKeyDown={e => e.key === "Enter" && join()} />
+            <input id="join-room" name="room" className="field" placeholder="Paste booth link or enter room code (e.g. abc123def4)" value={input} onChange={e => { setInput(e.target.value); setError(""); }} onKeyDown={e => e.key === "Enter" && join()} />
             {error && <p style={{ color: "#F87171", fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>{error}</p>}
           </div>
 

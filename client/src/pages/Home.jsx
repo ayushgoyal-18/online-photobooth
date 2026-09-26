@@ -1,18 +1,20 @@
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
 import {
   Camera, Download, Zap, Users, Film, Link2, ArrowRight,
   Heart, UserCircle, Trash2, Images, X, Sparkles,
 } from "lucide-react";
+import { trackEvent } from "../utils/analytics";
+import LegalModal from "../components/LegalModal";
 
 const FEATURES = [
-  { icon: <Camera size={18} />, title: "Simultaneous Camera Capture", desc: "Cameras fire at the exact same millisecond. Your faces merge into side-by-side frames in real time." },
+  { icon: <Camera size={18} />, title: "Simultaneous Camera Capture", desc: "A synchronized countdown triggers every participant's camera into side-by-side frames in real time." },
   { icon: <Users size={18} />, title: "Multi-User Group Booths", desc: "Connect solo, as a couple, or with groups up to 6 people from anywhere in the world." },
-  { icon: <Film size={18} />, title: "3 Authentic Strip Styles", desc: "Classic, Polaroid, and Retro Film with real film sprocket holes, grain, and dates." },
+  { icon: <Film size={18} />, title: "3 Authentic Strip Styles", desc: "Classic film sprocket holes, warm tones, and vintage date stamps." },
   { icon: <Zap size={18} />, title: "Filters & Sticker Studio", desc: "8 vintage color filters, draggable stickers, custom captions, and interactive retakes." },
-  { icon: <Link2 size={18} />, title: "Instant Room Sharing", desc: "Share a 6-letter room code or mobile QR code. No app downloads or accounts required." },
-  { icon: <Download size={18} />, title: "Print-Ready PNG Download", desc: "Export 3× high-resolution PNG photostrips ready for social sharing or printing." },
+  { icon: <Link2 size={18} />, title: "Instant Room Sharing", desc: "Share a room code or mobile QR code. No app downloads or accounts required." },
+  { icon: <Download size={18} />, title: "High-Resolution PNG Download", desc: "Export 3× high-resolution PNG photostrips ready for digital sharing or printing." },
 ];
 
 const MODES = [
@@ -109,7 +111,7 @@ function StripPreview({ layout }) {
       )}
 
       <div style={{ textAlign: "center", marginTop: 6, fontSize: 7, color: isRetro ? "#A07820" : "#A09070", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>
-        framoji.app
+        MADE WITH FRAMOJI
       </div>
     </div>
   );
@@ -140,10 +142,17 @@ function HowStep({ n, title, desc, delay }) {
   );
 }
 
+function formatGalleryDate(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  return isNaN(d.getTime()) ? String(date) : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const [code, setCode] = useState("");
   const [previewItem, setPreviewItem] = useState(null);
+  const [legalModal, setLegalModal] = useState({ isOpen: false, tab: "privacy" });
   const [gallery, setGallery] = useState(() => {
     try { return JSON.parse(localStorage.getItem("framoji-gallery") || "[]"); }
     catch { return []; }
@@ -156,15 +165,63 @@ export default function Home() {
     try { localStorage.setItem("framoji-gallery", JSON.stringify(updated)); } catch (_) { }
   };
 
+  useEffect(() => {
+    trackEvent("landing_page_view");
+  }, []);
+
+  useEffect(() => {
+    if (!previewItem) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") setPreviewItem(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewItem]);
+
   const quickJoin = () => {
-    const t = code.trim();
-    if (!t) return;
-    const m = t.match(/\/room\/([a-zA-Z0-9_-]{6,30})(?:\/)?$/i);
-    const roomCode = m ? m[1] : t;
-    if (/^[a-zA-Z0-9_-]{6,30}$/.test(roomCode)) {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    let roomCode = null;
+    try {
+      const url = new URL(trimmed.startsWith("http") ? trimmed : `http://dummy.com/${trimmed.replace(/^\/+/, "")}`);
+      const match = url.pathname.match(/^\/room\/([a-zA-Z0-9_-]{6,30})\/?$/i);
+      if (match) roomCode = match[1];
+    } catch (_) {}
+    if (!roomCode && /^[a-zA-Z0-9_-]{6,30}$/.test(trimmed)) {
+      roomCode = trimmed;
+    }
+
+    if (roomCode) {
+      trackEvent("join_booth", { source: "home_hero" });
       navigate(`/room/${roomCode}`);
     } else {
       navigate("/join");
+    }
+  };
+
+  const downloadGalleryItem = async (item) => {
+    const targetUrl = item?.cloudinaryUrl || item?.dataUrl;
+    if (!targetUrl) return;
+
+    trackEvent("download_clicked", { source: "home_gallery_modal" });
+    try {
+      const res = await fetch(targetUrl);
+      if (!res.ok) throw new Error("Download failed");
+
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `framoji-${item.roomId || item.stripId || "strip"}.png`;
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(targetUrl, "_blank", "noopener,noreferrer");
     }
   };
 
@@ -200,7 +257,7 @@ export default function Home() {
           </h1>
 
           <p style={{ color: "var(--text-sub)", fontSize: 15, lineHeight: 1.74, marginBottom: 32, maxWidth: 480 }}>
-            Framoji syncs webcams in real time, merges multi-camera shots into side-by-side frames, and exports print-ready photostrips in seconds.
+            Framoji syncs webcams in real time, merges multi-camera shots into side-by-side frames, and exports high-resolution photostrips in seconds.
           </p>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 28 }}>
@@ -238,7 +295,10 @@ export default function Home() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Images size={18} color="var(--violet-lt)" />
-              <h2 style={{ fontSize: 20, fontWeight: 800, color: "var(--cream)" }}>Your Saved Photostrips</h2>
+              <div>
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: "var(--cream)" }}>Saved on this device</h2>
+                <p style={{ fontSize: 11, color: "var(--text-sub)", margin: 0 }}>Your local photostrip gallery</p>
+              </div>
             </div>
             <span style={{ fontSize: 12, color: "var(--text-sub)" }}>{gallery.length} saved</span>
           </div>
@@ -270,7 +330,7 @@ export default function Home() {
                 <img src={item.cloudinaryUrl || item.dataUrl} alt={`Photostrip by ${item.names || "Framoji"}`} style={{ width: "100%", height: 220, objectFit: "contain", borderRadius: 8, background: "rgba(0,0,0,0.3)" }} />
                 <div style={{ marginTop: 8, padding: "0 4px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.names || "Photostrip"}</div>
-                  <div style={{ fontSize: 10, color: "var(--text-sub)", marginTop: 2 }}>{item.createdAt}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-sub)", marginTop: 2 }}>{formatGalleryDate(item.createdAt)}</div>
                 </div>
               </motion.div>
             ))}
@@ -287,12 +347,17 @@ export default function Home() {
                 <X size={20} />
               </button>
               <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 4, color: "var(--cream)" }}>{previewItem.names || "Saved Photostrip"}</h3>
-              <p style={{ fontSize: 11, color: "var(--text-sub)", marginBottom: 16 }}>Saved on {previewItem.createdAt}</p>
+              <p style={{ fontSize: 11, color: "var(--text-sub)", marginBottom: 16 }}>Saved on {formatGalleryDate(previewItem.createdAt)}</p>
               <img src={previewItem.cloudinaryUrl || previewItem.dataUrl} alt={`Photostrip preview for ${previewItem.names || "Framoji"}`} style={{ maxWidth: "100%", maxHeight: "60vh", objectFit: "contain", borderRadius: 10, marginBottom: 18, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }} />
               <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-                <a href={previewItem.cloudinaryUrl || previewItem.dataUrl} download={`framoji-${previewItem.roomId || "strip"}.png`} target="_blank" rel="noopener noreferrer" className="btn btn-primary" style={{ padding: "10px 24px", fontSize: 13, textDecoration: "none" }}>
-                  <Download size={14} /> View / Download Strip
-                </a>
+                <button
+                  type="button"
+                  onClick={() => downloadGalleryItem(previewItem)}
+                  className="btn btn-primary"
+                  style={{ padding: "10px 24px", fontSize: 13 }}
+                >
+                  <Download size={14} /> Download Strip
+                </button>
                 <button onClick={() => setPreviewItem(null)} className="btn btn-ghost" style={{ padding: "10px 18px", fontSize: 13 }}>
                   Close
                 </button>
@@ -312,7 +377,7 @@ export default function Home() {
           {[
             { layout: "classic", label: "Classic Strip", desc: "Clean borders, serif typography, elegant layout." },
             { layout: "polaroid", label: "Polaroid Instant", desc: "Wide white border, handwritten feel, stacked style." },
-            { layout: "retro", label: "Retro Film", desc: "Film sprocket holes, warm grain, vintage stamps." },
+            { layout: "retro", label: "Retro Film", desc: "Film sprocket holes, warm tones, and vintage stamps." },
           ].map((item, i) => (
             <motion.div key={item.layout} initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.08 }} style={{ textAlign: "center" }}>
               <div style={{ maxWidth: 180, margin: "0 auto 14px" }}>
@@ -333,8 +398,8 @@ export default function Home() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
           <HowStep n="01" delay={0} title="Create a Booth" desc="Pick your session type — Solo, Couple, or Friends & Family — and select your preferred layout." />
-          <HowStep n="02" delay={0.07} title="Invite Friends" desc="Share a 6-letter room code or mobile QR code. Friends join instantly from any device." />
-          <HowStep n="03" delay={0.14} title="Synchronized Snap" desc="Synced audio countdown fires all cameras simultaneously into a combined frame." />
+          <HowStep n="02" delay={0.07} title="Invite Friends" desc="Share a room code or mobile QR code. Friends join instantly from any device." />
+          <HowStep n="03" delay={0.14} title="Synchronized Snap" desc="Synced audio countdown captures all cameras together into a combined frame." />
           <HowStep n="04" delay={0.21} title="Customize & Download" desc="Apply filters, drag stickers, write a caption, and download a 3× high-res PNG." />
         </div>
       </section>
@@ -378,7 +443,6 @@ export default function Home() {
       </section>
 
       {/* Footer */}
-      {/* Footer */}
       <footer
         style={{
           borderTop: "1px solid var(--border)",
@@ -387,19 +451,47 @@ export default function Home() {
           justifyContent: "space-between",
           alignItems: "center",
           flexWrap: "wrap",
-          gap: 12,
+          gap: 16,
           position: "relative",
           zIndex: 5,
         }}
       >
-        <span style={{ fontWeight: 800, fontSize: 16 }}>
-          fra<span style={{ color: "var(--violet-lt)" }}>moji</span>
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{ fontWeight: 800, fontSize: 16 }}>
+            fra<span style={{ color: "var(--violet-lt)" }}>moji</span>
+          </span>
+          <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
+            Virtual online photobooth for friends & family
+          </span>
+        </div>
 
-        <span style={{ fontSize: 12, color: "var(--text-sub)" }}>
-          Virtual online photobooth for friends & family everywhere
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, fontSize: 12 }}>
+          <button
+            onClick={() => setLegalModal({ isOpen: true, tab: "privacy" })}
+            style={{ background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer", padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }}
+          >
+            Privacy Policy
+          </button>
+          <button
+            onClick={() => setLegalModal({ isOpen: true, tab: "terms" })}
+            style={{ background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer", padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }}
+          >
+            Terms of Use
+          </button>
+          <button
+            onClick={() => setLegalModal({ isOpen: true, tab: "contact" })}
+            style={{ background: "none", border: "none", color: "var(--text-sub)", cursor: "pointer", padding: 0, textDecoration: "underline", textUnderlineOffset: 3 }}
+          >
+            Contact
+          </button>
+        </div>
       </footer>
+
+      <LegalModal
+        isOpen={legalModal.isOpen}
+        initialTab={legalModal.tab}
+        onClose={() => setLegalModal({ isOpen: false, tab: "privacy" })}
+      />
     </div>
   );
 }
