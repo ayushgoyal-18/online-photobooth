@@ -1367,6 +1367,12 @@ export default function Room() {
       joinedRef.current = false;
       setIsHostState(false);
       isHostRef.current = false;
+      tokenRef.current = "";
+      try { localStorage.removeItem(`framoji-token-${roomId}`); } catch (_) {}
+      const newPid = (window.crypto?.randomUUID?.() || ("pid-" + Math.random().toString(36).slice(2)));
+      participantIdRef.current = newPid;
+      try { localStorage.setItem(`framoji-pid-${roomId}`, newPid); } catch (_) {}
+      setNameConfirmed(false);
     });
 
     socket.on("guest-auth-failed", (data) => {
@@ -1375,10 +1381,13 @@ export default function Room() {
       joinedRef.current = false;
       tokenRef.current = "";
       try { localStorage.removeItem(`framoji-token-${roomId}`); } catch (_) {}
+      const newPid = (window.crypto?.randomUUID?.() || ("pid-" + Math.random().toString(36).slice(2)));
+      participantIdRef.current = newPid;
+      try { localStorage.setItem(`framoji-pid-${roomId}`, newPid); } catch (_) {}
       setNameConfirmed(false);
       setGuestName("");
       guestNameRef.current = "";
-      setGuestAuthError(data?.message || "Your previous session expired. Please join the booth again.");
+      setGuestAuthError(data?.message || "Your previous session expired. Please enter your name to join again.");
     });
 
     socket.on("name-taken", () => {
@@ -1798,7 +1807,13 @@ export default function Room() {
         isMirrored={isMirrored}
         onJoin={(name) => {
           setGuestAuthError("");
-          setGuestName(name); guestNameRef.current = name; setNameConfirmed(true);
+          setGuestName(name); guestNameRef.current = name;
+          if (!participantIdRef.current) {
+            const newPid = (window.crypto?.randomUUID?.() || ("pid-" + Math.random().toString(36).slice(2)));
+            participantIdRef.current = newPid;
+            try { localStorage.setItem(`framoji-pid-${roomId}`, newPid); } catch (_) {}
+          }
+          setNameConfirmed(true);
           try {
             const s = JSON.parse(localStorage.getItem(`framoji-room-${roomId}`) || "{}");
             localStorage.setItem(`framoji-room-${roomId}`, JSON.stringify({ ...s, guestName: name }));
